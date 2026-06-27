@@ -26,3 +26,4 @@ pub const ASSETS: Symbol = symbol_short!("assets");
 pub const UPGRADED: Symbol = symbol_short!("upgraded");
 pub const BLEND_SUP: Symbol = symbol_short!("blend_sup");
 pub const BLEND_WD: Symbol = symbol_short!("blend_wd");
+pub const USER_STRATEGY: Symbol = symbol_short!("usr_strat");

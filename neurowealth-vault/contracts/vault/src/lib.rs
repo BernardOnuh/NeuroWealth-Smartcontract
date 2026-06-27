@@ -225,6 +225,8 @@ pub enum VaultError {
     DexPoolNotConfigured = 46,
     /// Caller is not allowed to set the DEX pool.
     OnlyOwnerCanSetDexPool = 47,
+    /// Strategy must be one of "conservative", "balanced", or "growth".
+    InvalidStrategy = 48,
 }
 
 // ============================================================================
@@ -311,6 +313,9 @@ pub enum DataKey {
     /// The address of the Stellar DEX liquidity pool contract used by the
     /// Balanced/Growth strategies for on-chain liquidity provision.
     DexPool,
+    /// Per-user investment strategy preference.
+    /// Set by the user, read by the AI agent to determine yield deployment.
+    UserStrategy(Address),
 }
 
 // ============================================================================
@@ -703,6 +708,23 @@ pub struct RebalanceFailedEvent {
     pub reason: Symbol,
 }
 
+/// Emitted when a user updates their investment strategy preference.
+///
+/// AI agents read this event to adjust yield deployment per user.
+///
+/// # Topics
+/// - `SymbolShort("usr_strat")` - Event identifier
+#[allow(missing_docs)]
+#[contracttype]
+pub struct UserStrategyUpdatedEvent {
+    /// The user who updated their strategy
+    pub user: Address,
+    /// Previous strategy symbol ("conservative", "balanced", "growth", or "")
+    pub old_strategy: Symbol,
+    /// New strategy symbol
+    pub new_strategy: Symbol,
+}
+
 #[allow(missing_docs)]
 #[contracttype]
 pub struct UserInfo {
@@ -787,6 +809,7 @@ pub(crate) const TOPIC_DEX_SUPPLY: Symbol = symbol_short!("dex_sup");
 pub(crate) const TOPIC_DEX_WITHDRAW: Symbol = symbol_short!("dex_wd");
 pub(crate) const TOPIC_DEX_POOL_CONFIGURED: Symbol = symbol_short!("dex_cfg");
 pub(crate) const TOPIC_PROTOCOL_CHANGED: Symbol = symbol_short!("proto_chg");
+pub(crate) const TOPIC_USER_STRATEGY_UPDATED: Symbol = symbol_short!("usr_strat");
 pub(crate) const TOPIC_REBALANCE_FAILED: Symbol = symbol_short!("reb_fail");
 
 impl BlendPoolClient {
@@ -1228,6 +1251,28 @@ impl NeuroWealthVault {
                 .checked_add(shares_to_mint)
                 .expect("vault: shares overflow")),
         );
+
+        // Set default strategy for first-time depositors
+        if current_shares == 0
+            && !env
+                .storage()
+                .persistent()
+                .has(&DataKey::UserStrategy(user.clone()))
+        {
+            let default_strategy = Symbol::new(&env, "balanced");
+            env.storage()
+                .persistent()
+                .set(&DataKey::UserStrategy(user.clone()), &default_strategy);
+
+            env.events().publish(
+                (TOPIC_USER_STRATEGY_UPDATED, user.clone()),
+                UserStrategyUpdatedEvent {
+                    user: user.clone(),
+                    old_strategy: Symbol::new(&env, ""),
+                    new_strategy: default_strategy,
+                },
+            );
+        }
 
         // Update total shares
         let total_shares: i128 = env
@@ -2477,6 +2522,81 @@ impl NeuroWealthVault {
         Self::get_max_deposit_internal(&env)
     }
 
+    // ==========================================================================
+    // USER STRATEGY PREFERENCE
+    // ==========================================================================
+
+    /// Sets the user's investment strategy preference.
+    ///
+    /// Only the user themselves can set their own strategy (requires auth).
+    /// The strategy is stored on-chain for the AI agent to read.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    /// * `user` - The user address (must authorize).
+    /// * `strategy` - The strategy symbol: "conservative", "balanced", or "growth".
+    ///
+    /// # Events
+    ///
+    /// Emits:
+    /// - `UserStrategyUpdatedEvent`
+    ///
+    /// # Panics
+    ///
+    /// - If the vault is not initialized.
+    /// - If the user does not authorize.
+    /// - If the strategy is not one of the valid options.
+    pub fn set_user_strategy(env: Env, user: Address, strategy: Symbol) {
+        Self::require_initialized(&env);
+        user.require_auth();
+
+        let valid = strategy == Symbol::new(&env, "conservative")
+            || strategy == Symbol::new(&env, "balanced")
+            || strategy == Symbol::new(&env, "growth");
+
+        Self::require(&env, valid, VaultError::InvalidStrategy);
+
+        let old_strategy: Symbol = env
+            .storage()
+            .persistent()
+            .get(&DataKey::UserStrategy(user.clone()))
+            .unwrap_or(Symbol::new(&env, ""));
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::UserStrategy(user.clone()), &strategy);
+
+        env.events().publish(
+            (TOPIC_USER_STRATEGY_UPDATED, user.clone()),
+            UserStrategyUpdatedEvent {
+                user,
+                old_strategy,
+                new_strategy: strategy,
+            },
+        );
+    }
+
+    /// Returns the user's investment strategy preference.
+    ///
+    /// If the user has not set a strategy, returns the default ("balanced").
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    /// * `user` - The user address to query.
+    ///
+    /// # Returns
+    ///
+    /// The strategy symbol ("conservative", "balanced", or "growth").
+    pub fn get_user_strategy(env: Env, user: Address) -> Symbol {
+        Self::require_initialized(&env);
+        env.storage()
+            .persistent()
+            .get(&DataKey::UserStrategy(user))
+            .unwrap_or(Symbol::new(&env, "balanced"))
+    }
+
     /// Updates the authorized AI agent address.
     ///
     /// Only the owner can update the agent. This allows for agent key rotation
@@ -2954,6 +3074,21 @@ impl NeuroWealthVault {
             let deployed_balance = BlendPoolClient::get_balance(
                 &env,
                 &blend_pool,
+                &usdc_token,
+                &env.current_contract_address(),
+            );
+            total_available = total_available
+                .checked_add(deployed_balance)
+                .expect("vault: total available overflow");
+        }
+
+        if current_protocol == symbol_short!("dex")
+            && env.storage().instance().has(&DataKey::DexPool)
+        {
+            let dex_pool: Address = env.storage().instance().get(&DataKey::DexPool).unwrap();
+            let deployed_balance = DexPoolClient::get_balance(
+                &env,
+                &dex_pool,
                 &usdc_token,
                 &env.current_contract_address(),
             );
