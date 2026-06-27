@@ -2537,7 +2537,8 @@ impl NeuroWealthVault {
     ///
     /// # Events
     ///
-    /// None.
+    /// Emits:
+    /// - `BlendPoolConfiguredEvent`
     ///
     /// # Errors
     ///
