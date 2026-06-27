@@ -3012,6 +3012,7 @@ impl NeuroWealthVault {
     ///
     /// # Panics
     ///
+    /// - If the vault is paused.
     /// - If the caller is not the stored owner.
     /// - If `new_wasm_hash` does not correspond to an uploaded WASM binary.
     pub fn upgrade(env: Env, owner: Address, new_wasm_hash: BytesN<32>) {
