@@ -370,3 +370,205 @@ fn test_decrease_requires_owner_cosign() {
     // Total assets must be unchanged.
     assert_eq!(client.get_total_assets(), deposit_amount);
 }
+
+// ============================================================================
+// OWNER ROLE — REMAINING ENTRYPOINTS (negative empty-auth guards)
+// ============================================================================
+//
+// Each test below drops all authorization with `mock_auths(&[])` and asserts the
+// call errors. A present `require_auth()` (directly or via `require_is_owner`)
+// makes the call fail; if that check were ever dropped, the call would succeed
+// and the assertion would catch it. These cover the owner-only entrypoints that
+// `test_access_control.rs` otherwise exercises only under `mock_all_auths`.
+
+/// Negative: `unpause` must error without the owner's authorization.
+#[test]
+fn test_unpause_requires_owner_auth() {
+    let env = Env::default();
+    let (contract_id, _agent, owner, _usdc_token) = setup(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    env.mock_auths(&[]);
+
+    let result = client.try_unpause(&owner);
+    assert!(
+        result.is_err(),
+        "unpause must fail without the owner's authorization"
+    );
+}
+
+/// Negative: `emergency_pause` must error without the owner's authorization.
+#[test]
+fn test_emergency_pause_requires_owner_auth() {
+    let env = Env::default();
+    let (contract_id, _agent, owner, _usdc_token) = setup(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    env.mock_auths(&[]);
+
+    let result = client.try_emergency_pause(&owner);
+    assert!(
+        result.is_err(),
+        "emergency_pause must fail without the owner's authorization"
+    );
+}
+
+/// Negative: `set_user_deposit_cap` must error without the owner's authorization.
+#[test]
+fn test_set_user_deposit_cap_requires_owner_auth() {
+    let env = Env::default();
+    let (contract_id, _agent, _owner, _usdc_token) = setup(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    env.mock_auths(&[]);
+
+    let result = client.try_set_user_deposit_cap(&10_000_000_000_i128);
+    assert!(
+        result.is_err(),
+        "set_user_deposit_cap must fail without the owner's authorization"
+    );
+}
+
+/// Negative: `set_deposit_limits` must error without the owner's authorization.
+#[test]
+fn test_set_deposit_limits_requires_owner_auth() {
+    let env = Env::default();
+    let (contract_id, _agent, _owner, _usdc_token) = setup(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    env.mock_auths(&[]);
+
+    let result = client.try_set_deposit_limits(&1_000_000_i128, &100_000_000_i128);
+    assert!(
+        result.is_err(),
+        "set_deposit_limits must fail without the owner's authorization"
+    );
+}
+
+/// Negative: `update_agent` must error without the owner's authorization.
+#[test]
+fn test_update_agent_requires_owner_auth() {
+    let env = Env::default();
+    let (contract_id, _agent, _owner, _usdc_token) = setup(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let new_agent = Address::generate(&env);
+    env.mock_auths(&[]);
+
+    let result = client.try_update_agent(&new_agent);
+    assert!(
+        result.is_err(),
+        "update_agent must fail without the owner's authorization"
+    );
+}
+
+/// Negative: `set_blend_pool` must error without the owner's authorization, even
+/// when the real owner address is named (so the failure is the missing
+/// `owner.require_auth()`, not the identity check).
+#[test]
+fn test_set_blend_pool_requires_owner_auth() {
+    let env = Env::default();
+    let (contract_id, _agent, owner, _usdc_token) = setup(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let pool = Address::generate(&env);
+    env.mock_auths(&[]);
+
+    let result = client.try_set_blend_pool(&owner, &pool);
+    assert!(
+        result.is_err(),
+        "set_blend_pool must fail without the owner's authorization"
+    );
+}
+
+// ============================================================================
+// OWNERSHIP TRANSFER — two-step handshake auth
+// ============================================================================
+
+/// Positive: `transfer_ownership` succeeds with auth scoped to the current owner
+/// for *only* that call. `require_is_owner` performs `owner.require_auth()`.
+#[test]
+fn test_transfer_ownership_with_scoped_owner_auth() {
+    let env = Env::default();
+    let (contract_id, _agent, owner, _usdc_token) = setup(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let new_owner = Address::generate(&env);
+    env.mock_auths(&[MockAuth {
+        address: &owner,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "transfer_ownership",
+            args: (new_owner.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.transfer_ownership(&new_owner);
+    // Ownership does not change until accepted; owner-only calls still work.
+    assert_eq!(client.get_owner(), owner);
+}
+
+/// Negative: `transfer_ownership` must error without the current owner's auth.
+#[test]
+fn test_transfer_ownership_requires_owner_auth() {
+    let env = Env::default();
+    let (contract_id, _agent, _owner, _usdc_token) = setup(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let new_owner = Address::generate(&env);
+    env.mock_auths(&[]);
+
+    let result = client.try_transfer_ownership(&new_owner);
+    assert!(
+        result.is_err(),
+        "transfer_ownership must fail without the current owner's authorization"
+    );
+}
+
+/// Negative: `accept_ownership` must error without the pending owner's auth, even
+/// after a valid transfer was initiated. Guards `new_owner.require_auth()`.
+#[test]
+fn test_accept_ownership_requires_pending_owner_auth() {
+    let env = Env::default();
+    let (contract_id, _agent, _owner, _usdc_token) = setup(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let new_owner = Address::generate(&env);
+    // Initiate the transfer while full mock is still active (incidental setup).
+    client.transfer_ownership(&new_owner);
+
+    // The pending owner must still sign to accept — drop all auth.
+    env.mock_auths(&[]);
+
+    let result = client.try_accept_ownership(&new_owner);
+    assert!(
+        result.is_err(),
+        "accept_ownership must fail without the pending owner's authorization"
+    );
+}
+
+// ============================================================================
+// USER ROLE — REMAINING ENTRYPOINTS
+// ============================================================================
+
+/// Negative: `withdraw_all` must error without the user's authorization, even
+/// with a funded position.
+#[test]
+fn test_withdraw_all_requires_user_auth() {
+    let env = Env::default();
+    let (contract_id, _agent, _owner, usdc_token) = setup(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let user = Address::generate(&env);
+    let amount = 5_000_000_i128;
+    mint_and_deposit(&env, &client, &usdc_token, &user, amount);
+
+    env.mock_auths(&[]);
+
+    let result = client.try_withdraw_all(&user);
+    assert!(
+        result.is_err(),
+        "withdraw_all must fail without the user's authorization"
+    );
+}
