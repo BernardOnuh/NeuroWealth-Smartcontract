@@ -2166,7 +2166,12 @@ impl NeuroWealthVault {
     ///
     /// * `env` - The Soroban environment.
     /// * `min` - New per-user deposit cap in USDC units (7 decimal places).
+    ///   Despite the name, this is the user-deposit cap, not a per-deposit minimum.
     /// * `max` - New TVL cap in USDC units (7 decimal places).
+    ///   Despite the name, this is the TVL cap, not a per-deposit maximum.
+    ///
+    /// Both values are validated to be non-negative, and `max` must be `>= min`,
+    /// so a negative input can never silently disable a cap (issues #280, #281).
     ///
     /// # Returns
     ///

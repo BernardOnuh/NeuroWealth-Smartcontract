@@ -184,7 +184,7 @@ Key Functions
 
 | Function | Who Can Call | Description |
 | :--- | :--- | :--- |
-| `initialize` | Owner (once) | Set agent address and USDC token |
+| `initialize` | Deployer (once) | Authorize via deployer signature and set **separate** owner and agent addresses plus the USDC token |
 | `deposit` | Any verified user | Deposit USDC into the vault |
 | `withdraw` | User (their own funds) | Withdraw USDC back to wallet |
 | `withdraw_all` | User (their own funds) | Withdraw all USDC by burning all shares |
