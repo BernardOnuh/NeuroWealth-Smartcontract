@@ -49,7 +49,7 @@ fn snapshot_vault_initialized_event_all_fields() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (contract_id, agent, owner, usdc_token) = setup_vault_with_token(&env);
+    let (_contract_id, agent, owner, usdc_token) = setup_vault_with_token(&env);
 
     let events = find_events_by_topic(env.events().all(), &env, TOPIC_INIT);
     assert_eq!(events.len(), 1, "exactly one VaultInitializedEvent expected");
@@ -179,6 +179,78 @@ fn snapshot_rebalance_event_all_fields_noop() {
     snap!(event, amount_moved, 0_i128, "RebalanceEvent");
     snap!(event, amount_supplied, 0_i128, "RebalanceEvent");
     snap!(event, amount_withdrawn, 0_i128, "RebalanceEvent");
+}
+
+#[test]
+fn snapshot_rebalance_event_with_blend_supply() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let user = Address::generate(&env);
+    let deposit_amount = 15_000_000_i128;
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
+
+    // Rebalance to Blend: should show amount_supplied
+    client.rebalance(&symbol_short!("blend"), &950_i128, &0_i128);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_REBALANCE);
+    assert_eq!(events.len(), 1, "exactly one RebalanceEvent expected");
+
+    let (_, _, data) = &events[0];
+    let event = RebalanceEvent::try_from_val(&env, data)
+        .expect("RebalanceEvent: try_from_val failed — schema may have drifted");
+
+    snap!(event, protocol, symbol_short!("blend"), "RebalanceEvent");
+    snap!(event, expected_apy, 950_i128, "RebalanceEvent");
+    snap!(event, status, symbol_short!("success"), "RebalanceEvent");
+    snap!(event, amount_attempted, deposit_amount, "RebalanceEvent");
+    snap!(event, amount_moved, deposit_amount, "RebalanceEvent");
+    snap!(event, amount_supplied, deposit_amount, "RebalanceEvent");
+    snap!(event, amount_withdrawn, 0_i128, "RebalanceEvent");
+}
+
+#[test]
+fn snapshot_rebalance_event_with_blend_withdrawal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let user = Address::generate(&env);
+    let deposit_amount = 20_000_000_i128;
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
+
+    // First supply to Blend
+    client.rebalance(&symbol_short!("blend"), &1100_i128, &0_i128);
+
+    // Then withdraw from Blend: should show amount_withdrawn
+    client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_REBALANCE);
+    assert_eq!(events.len(), 2, "two RebalanceEvents expected");
+
+    // Check the withdrawal event (second one)
+    let (_, _, data) = &events[1];
+    let event = RebalanceEvent::try_from_val(&env, data)
+        .expect("RebalanceEvent: try_from_val failed — schema may have drifted");
+
+    snap!(event, protocol, symbol_short!("none"), "RebalanceEvent");
+    snap!(event, expected_apy, 0_i128, "RebalanceEvent");
+    snap!(event, status, symbol_short!("success"), "RebalanceEvent");
+    snap!(event, amount_attempted, deposit_amount, "RebalanceEvent");
+    snap!(event, amount_moved, deposit_amount, "RebalanceEvent");
+    snap!(event, amount_supplied, 0_i128, "RebalanceEvent");
+    snap!(event, amount_withdrawn, deposit_amount, "RebalanceEvent");
 }
 
 // ── VaultPausedEvent ──────────────────────────────────────────────────────────

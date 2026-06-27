@@ -23,7 +23,7 @@
 use super::utils::*;
 use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, Ledger as _},
+    testutils::Address as _,
     Address, Env,
 };
 
@@ -132,7 +132,7 @@ fn test_config_keys_survive_deposit_withdraw_cycle() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (vault_id, _agent, owner, usdc_token) = setup_vault_with_token(&env);
+    let (vault_id, _agent, _owner, usdc_token) = setup_vault_with_token(&env);
     let client = NeuroWealthVaultClient::new(&env, &vault_id);
 
     // Record initial configuration.
@@ -157,7 +157,7 @@ fn test_config_keys_survive_deposit_withdraw_cycle() {
     assert_eq!(client.get_max_deposit(), max_dep_before, "max deposit must not change");
 
     // Verify owner can still update caps after the cycle (key write path intact).
-    client.set_caps(&owner, &(user_cap_before * 2), &(tvl_cap_before * 2));
+    client.set_caps(&(user_cap_before * 2), &(tvl_cap_before * 2));
     assert_eq!(client.get_user_deposit_cap(), user_cap_before * 2);
     assert_eq!(client.get_tvl_cap(), tvl_cap_before * 2);
 }
@@ -174,7 +174,7 @@ fn test_current_protocol_key_survives_rebalance_transitions() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (vault_id, agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let (vault_id, _agent, _owner, usdc_token) = setup_vault_with_token(&env);
     let client = NeuroWealthVaultClient::new(&env, &vault_id);
 
     // Initial state: no rebalance yet — protocol is "none".
