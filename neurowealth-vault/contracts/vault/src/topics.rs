@@ -37,3 +37,6 @@ pub const TOPIC_DEX_POOL_CONFIGURED: Symbol = symbol_short!("dex_cfg");
 pub const TOPIC_PROTOCOL_CHANGED: Symbol = symbol_short!("proto_chg");
 pub const TOPIC_USER_STRATEGY_UPDATED: Symbol = symbol_short!("usr_strat");
 pub const TOPIC_REBALANCE_FAILED: Symbol = symbol_short!("reb_fail");
+pub const TOPIC_AGENT_UPDATE_PROPOSED: Symbol = symbol_short!("agt_prop");
+pub const TOPIC_AGENT_UPDATE_CONFIRMED: Symbol = symbol_short!("agt_conf");
+pub const TOPIC_AGENT_UPDATE_CANCELLED: Symbol = symbol_short!("agt_cncl");

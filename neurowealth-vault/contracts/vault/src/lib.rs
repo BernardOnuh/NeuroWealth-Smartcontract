@@ -227,6 +227,12 @@ pub enum VaultError {
     OnlyOwnerCanSetDexPool = 47,
     /// Strategy must be one of "conservative", "balanced", or "growth".
     InvalidStrategy = 48,
+    /// An agent update proposal is already pending.
+    AgentUpdateAlreadyPending = 49,
+    /// No pending agent update exists to confirm or cancel.
+    NoAgentUpdatePending = 50,
+    /// The agent timelock delay has not yet elapsed.
+    AgentTimelockNotExpired = 51,
 }
 
 // ============================================================================
@@ -316,6 +322,10 @@ pub enum DataKey {
     /// Per-user investment strategy preference.
     /// Set by the user, read by the AI agent to determine yield deployment.
     UserStrategy(Address),
+    /// Pending agent address awaiting timelock confirmation (#317).
+    PendingAgent,
+    /// Ledger sequence at which the pending agent update becomes effective (#317).
+    AgentTimelockExpiry,
 }
 
 // ============================================================================
@@ -543,6 +553,41 @@ pub struct DepositLimitsUpdatedEvent {
 pub struct AgentUpdatedEvent {
     pub old_agent: Address,
     pub new_agent: Address,
+}
+
+/// Emitted when an agent update is proposed via `update_agent()` (timelock step 1).
+///
+/// # Topics
+/// - `SymbolShort("agt_prop")` - Event identifier
+#[allow(missing_docs)]
+#[contracttype]
+pub struct AgentUpdateProposedEvent {
+    pub old_agent: Address,
+    pub new_agent: Address,
+    /// Ledger at which `confirm_agent_update()` becomes callable.
+    pub effective_ledger: u32,
+}
+
+/// Emitted when a pending agent update is confirmed via `confirm_agent_update()` (timelock step 2).
+///
+/// # Topics
+/// - `SymbolShort("agt_conf")` - Event identifier
+#[allow(missing_docs)]
+#[contracttype]
+pub struct AgentUpdateConfirmedEvent {
+    pub old_agent: Address,
+    pub new_agent: Address,
+}
+
+/// Emitted when a pending agent update is cancelled via `cancel_agent_update()`.
+///
+/// # Topics
+/// - `SymbolShort("agt_cncl")` - Event identifier
+#[allow(missing_docs)]
+#[contracttype]
+pub struct AgentUpdateCancelledEvent {
+    pub old_agent: Address,
+    pub proposed_new_agent: Address,
 }
 
 /// Emitted when ownership transfer is initiated.
@@ -774,6 +819,10 @@ pub(crate) const DEFAULT_APPROVAL_TTL: u32 = 100_000;
 const MIN_APPROVAL_TTL: u32 = 1_000;
 const MAX_APPROVAL_TTL: u32 = 500_000;
 
+/// Minimum ledger delay before a proposed agent update can be confirmed (~24 h on Stellar mainnet).
+/// 17,280 ledgers × ~5 s per ledger ≈ 86,400 s = 24 h.
+const AGENT_TIMELOCK_LEDGERS: u32 = 17_280;
+
 /// Minimum ledgers remaining before `touch_user_ttl` extends a user's `Shares` entry.
 const USER_SHARES_TTL_THRESHOLD: u32 = 100;
 /// Target ledgers to extend a user's `Shares` entry to when maintaining TTL.
@@ -785,6 +834,7 @@ const USER_SHARES_TTL_EXTEND_TO: u32 = 100;
 const DEFAULT_BLEND_APPROVAL_TTL: u32 = 100_000;
 
 use topics::{
+    TOPIC_AGENT_UPDATE_CANCELLED, TOPIC_AGENT_UPDATE_CONFIRMED, TOPIC_AGENT_UPDATE_PROPOSED,
     TOPIC_AGENT_UPDATED, TOPIC_ASSETS_UPDATED, TOPIC_BLEND_POOL_CONFIGURED, TOPIC_BLEND_SUPPLY,
     TOPIC_BLEND_WITHDRAW, TOPIC_CAPS_UPDATED, TOPIC_DEPOSIT, TOPIC_DEPOSIT_LIMITS_UPDATED,
     TOPIC_DEX_POOL_CONFIGURED, TOPIC_DEX_SUPPLY, TOPIC_DEX_WITHDRAW, TOPIC_EMERGENCY_PAUSED,
@@ -2579,47 +2629,182 @@ impl NeuroWealthVault {
             .unwrap_or(Symbol::new(&env, "balanced"))
     }
 
-    /// Updates the authorized AI agent address.
+    /// Proposes an agent update with a 24-hour timelock (step 1 of 2). (#317)
     ///
-    /// Only the owner can update the agent. This allows for agent key rotation
-    /// or migration to a new agent implementation.
+    /// Records the new agent as pending and sets an expiry ledger after which
+    /// `confirm_agent_update()` may be called. During the delay, operators and
+    /// users can observe the proposal on-chain and react before the change takes
+    /// effect. Only one pending proposal is allowed at a time.
     ///
     /// # Arguments
     ///
     /// * `env` - The Soroban environment.
-    /// * `new_agent` - The new AI agent address.
-    ///
-    /// # Returns
-    ///
-    /// None.
+    /// * `new_agent` - The proposed new AI agent address.
     ///
     /// # Events
     ///
     /// Emits:
-    /// - `AgentUpdatedEvent`
-    ///
-    /// # Errors
-    ///
-    /// None.
+    /// - `AgentUpdateProposedEvent`
     ///
     /// # Panics
     ///
     /// - If the caller is not the owner.
+    /// - If a pending agent update already exists (`AgentUpdateAlreadyPending`).
     pub fn update_agent(env: Env, new_agent: Address) {
         Self::require_initialized(&env);
         Self::require_is_owner(&env);
 
-        let old_agent: Address = env.storage().instance().get(&DataKey::Agent).unwrap();
+        Self::require(
+            &env,
+            !env.storage().instance().has(&DataKey::PendingAgent),
+            VaultError::AgentUpdateAlreadyPending,
+        );
 
-        env.storage().instance().set(&DataKey::Agent, &new_agent);
+        let old_agent: Address = env.storage().instance().get(&DataKey::Agent).unwrap();
+        let effective_ledger = env
+            .ledger()
+            .sequence()
+            .saturating_add(AGENT_TIMELOCK_LEDGERS);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAgent, &new_agent);
+        env.storage()
+            .instance()
+            .set(&DataKey::AgentTimelockExpiry, &effective_ledger);
 
         env.events().publish(
-            (TOPIC_AGENT_UPDATED,),
-            AgentUpdatedEvent {
+            (TOPIC_AGENT_UPDATE_PROPOSED,),
+            AgentUpdateProposedEvent {
+                old_agent,
+                new_agent,
+                effective_ledger,
+            },
+        );
+    }
+
+    /// Confirms a pending agent update after the timelock has elapsed (step 2 of 2). (#317)
+    ///
+    /// Can only be called once `env.ledger().sequence() >= AgentTimelockExpiry`.
+    /// On success the pending agent becomes the active agent and the proposal is cleared.
+    ///
+    /// # Events
+    ///
+    /// Emits:
+    /// - `AgentUpdateConfirmedEvent`
+    /// - `AgentUpdatedEvent` (for backward-compatible indexers)
+    ///
+    /// # Panics
+    ///
+    /// - If the caller is not the owner.
+    /// - If no pending proposal exists (`NoAgentUpdatePending`).
+    /// - If the timelock delay has not yet elapsed (`AgentTimelockNotExpired`).
+    pub fn confirm_agent_update(env: Env) {
+        Self::require_initialized(&env);
+        Self::require_is_owner(&env);
+
+        Self::require(
+            &env,
+            env.storage().instance().has(&DataKey::PendingAgent),
+            VaultError::NoAgentUpdatePending,
+        );
+
+        let expiry: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::AgentTimelockExpiry)
+            .unwrap_or(0);
+
+        Self::require(
+            &env,
+            env.ledger().sequence() >= expiry,
+            VaultError::AgentTimelockNotExpired,
+        );
+
+        let old_agent: Address = env.storage().instance().get(&DataKey::Agent).unwrap();
+        let new_agent: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAgent)
+            .unwrap();
+
+        env.storage().instance().set(&DataKey::Agent, &new_agent);
+        env.storage().instance().remove(&DataKey::PendingAgent);
+        env.storage().instance().remove(&DataKey::AgentTimelockExpiry);
+
+        env.events().publish(
+            (TOPIC_AGENT_UPDATE_CONFIRMED,),
+            AgentUpdateConfirmedEvent {
                 old_agent: old_agent.clone(),
                 new_agent: new_agent.clone(),
             },
         );
+
+        // Emit backward-compatible event so existing indexers tracking TOPIC_AGENT_UPDATED see the change.
+        env.events().publish(
+            (TOPIC_AGENT_UPDATED,),
+            AgentUpdatedEvent {
+                old_agent,
+                new_agent,
+            },
+        );
+    }
+
+    /// Cancels a pending agent update before it can be confirmed. (#317)
+    ///
+    /// Only the owner may cancel. Clears the pending proposal so a new one can
+    /// be proposed. Safe to call at any point during the timelock window.
+    ///
+    /// # Events
+    ///
+    /// Emits:
+    /// - `AgentUpdateCancelledEvent`
+    ///
+    /// # Panics
+    ///
+    /// - If the caller is not the owner.
+    /// - If no pending proposal exists (`NoAgentUpdatePending`).
+    pub fn cancel_agent_update(env: Env) {
+        Self::require_initialized(&env);
+        Self::require_is_owner(&env);
+
+        Self::require(
+            &env,
+            env.storage().instance().has(&DataKey::PendingAgent),
+            VaultError::NoAgentUpdatePending,
+        );
+
+        let old_agent: Address = env.storage().instance().get(&DataKey::Agent).unwrap();
+        let proposed_new_agent: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAgent)
+            .unwrap();
+
+        env.storage().instance().remove(&DataKey::PendingAgent);
+        env.storage().instance().remove(&DataKey::AgentTimelockExpiry);
+
+        env.events().publish(
+            (TOPIC_AGENT_UPDATE_CANCELLED,),
+            AgentUpdateCancelledEvent {
+                old_agent,
+                proposed_new_agent,
+            },
+        );
+    }
+
+    /// Returns the pending agent address and effective ledger, if a proposal is active. (#317)
+    pub fn get_pending_agent_update(env: Env) -> Option<(Address, u32)> {
+        Self::require_initialized(&env);
+        let pending: Option<Address> = env.storage().instance().get(&DataKey::PendingAgent);
+        pending.map(|addr| {
+            let expiry: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AgentTimelockExpiry)
+                .unwrap_or(0);
+            (addr, expiry)
+        })
     }
 
     /// Sets the Blend pool contract address for on-chain integration.
@@ -3022,7 +3207,8 @@ impl NeuroWealthVault {
             let max_decrease = old_total
                 .checked_mul(effective_cap_bps as i128)
                 .expect("vault: max decrease mul overflow")
-                / 10_000;
+                .checked_div(10_000)
+                .expect("vault: max decrease div overflow");
             let actual_decrease = old_total
                 .checked_sub(new_total)
                 .expect("vault: decrease underflow");
@@ -3900,7 +4086,8 @@ impl NeuroWealthVault {
         total_assets
             .checked_mul(EXCHANGE_RATE_SCALAR)
             .expect("vault: exchange rate overflow")
-            / total_shares
+            .checked_div(total_shares)
+            .expect("vault: exchange rate div overflow")
     }
 
     // ==========================================================================
