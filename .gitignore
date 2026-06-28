@@ -1,6 +1,9 @@
 # E2E test artifacts (generated at runtime)
 scripts/e2e-artifacts/*
 !scripts/e2e-artifacts/.gitkeep
-
+...
 CLAUDE.md
 plan.md
+
+issue.md
+pr.md

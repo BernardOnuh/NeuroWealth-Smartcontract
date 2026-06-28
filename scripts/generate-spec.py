@@ -482,6 +482,9 @@ class ContractSpecGenerator:
             ("get_approval_ttl", "", "u32", "Get the configured token approval TTL in ledgers", "instance"),
             ("get_rebalance_cooldown", "", "u32", "Get the minimum ledger interval between rebalances", "instance"),
             ("get_last_rebalance_ledger", "", "u32", "Get the ledger sequence of the last successful rebalance", "instance"),
+            ("get_idle_balance", "", "i128", "Get the vault's idle USDC balance (funds held in the vault, not deployed to any protocol)", "instance"),
+            ("get_deployed_assets", "", "i128", "Get the amount of USDC currently deployed to an external yield protocol", "instance"),
+            ("get_asset_breakdown", "", "(i128, i128)", "Get the vault's asset breakdown as (idle, deployed) in a single call", "instance"),
         ]
         
         for name, param, return_type, desc, storage_type in query_functions:

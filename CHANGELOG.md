@@ -3,10 +3,19 @@
 All notable changes to this repository are documented in this file.
 This changelog is tied to the vault contract `Version` storage value. Each released contract upgrade should add a new entry matching the stored version number.
 
+> **Contributors:** Any PR that changes on-chain contract behavior, emitted events, error codes,
+> or the `Version` storage value **must** update this file. Add your changes under `[Unreleased]`
+> and note the target `Version` value if an upgrade is planned. See the PR checklist in
+> `.github/pull_request_template.md`.
+
 ## [Unreleased]
-- Add pending contract changes here.
-- Include the target `Version` storage value for any upgrade.
-- Update the PR description and reviewer notes when contract behavior changes.
+<!-- Add entries below. Format: `- Short description (Issue #N).` -->
+<!-- If this PR bumps get_version(), note the new Version value here. -->
+- Add GitHub issue templates as structured YAML forms (Issue #330).
+- Migrate weak `!events.is_empty()` test assertions to strict payload checks (Issue #333).
+- Dedicated `TvlCapUpdatedEvent` / `UserDepositCapUpdatedEvent` replace ambiguous
+  `LimitsUpdatedEvent` for cap-only updates; indexer migration note added to EVENTS.md (Issue #328).
+- CHANGELOG.md now tied to contract `Version` with PR template reminder (Issue #335).
 - **DEX liquidity pool integration (Issue #228):** the vault can now deploy USDC
   to a Stellar DEX liquidity pool in addition to Blend, implementing the
   on-chain side of the Balanced/Growth strategies.

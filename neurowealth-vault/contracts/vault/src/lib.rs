@@ -4090,6 +4090,117 @@ impl NeuroWealthVault {
             .expect("vault: exchange rate div overflow")
     }
 
+    /// Returns the vault's idle USDC balance (funds sitting in the vault, not deployed).
+    ///
+    /// Idle funds are USDC held directly by the vault contract that have not yet
+    /// been deployed to an external yield protocol via `rebalance()`. This value
+    /// reflects the vault's on-chain token balance and decreases when the agent
+    /// deploys funds (e.g., to Blend) and increases after protocol withdrawals.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    ///
+    /// # Returns
+    ///
+    /// Returns the idle USDC balance in raw units (7 decimal places).
+    ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    ///
+    /// # Panics
+    ///
+    /// None.
+    pub fn get_idle_balance(env: Env) -> i128 {
+        Self::require_initialized(&env);
+        let usdc: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
+        token::Client::new(&env, &usdc).balance(&env.current_contract_address())
+    }
+
+    /// Returns the amount of USDC currently deployed to an external yield protocol.
+    ///
+    /// Deployed assets are funds that have been supplied to an external protocol
+    /// (e.g., Blend, DEX) via `rebalance()`. When `CurrentProtocol` is `"none"`,
+    /// no funds are deployed and this function returns `0`. The value is queried
+    /// live from the protocol's `balance` entrypoint.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    ///
+    /// # Returns
+    ///
+    /// Returns the deployed USDC amount in raw units (7 decimal places), or `0`
+    /// when no funds are deployed.
+    ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    ///
+    /// # Panics
+    ///
+    /// None.
+    pub fn get_deployed_assets(env: Env) -> i128 {
+        Self::require_initialized(&env);
+        let protocol: Symbol = env
+            .storage()
+            .instance()
+            .get(&DataKey::CurrentProtocol)
+            .unwrap_or(symbol_short!("none"));
+        Self::get_protocol_balance(&env, &protocol)
+    }
+
+    /// Returns the vault's asset breakdown as `(idle, deployed)`.
+    ///
+    /// Combines [`Self::get_idle_balance`] and [`Self::get_deployed_assets`] into
+    /// a single call for convenience. Useful for dashboards and AI agents that need
+    /// both values atomically in one RPC round-trip.
+    ///
+    /// - `idle`:     USDC held directly by the vault contract (not in any protocol).
+    /// - `deployed`: USDC currently supplied to an external yield protocol.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    ///
+    /// # Returns
+    ///
+    /// Returns `(idle, deployed)` where both values are in raw USDC units
+    /// (7 decimal places).
+    ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    ///
+    /// # Panics
+    ///
+    /// None.
+    pub fn get_asset_breakdown(env: Env) -> (i128, i128) {
+        Self::require_initialized(&env);
+        let usdc: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
+        let idle = token::Client::new(&env, &usdc).balance(&env.current_contract_address());
+        let protocol: Symbol = env
+            .storage()
+            .instance()
+            .get(&DataKey::CurrentProtocol)
+            .unwrap_or(symbol_short!("none"));
+        let deployed = Self::get_protocol_balance(&env, &protocol);
+        (idle, deployed)
+    }
+
     // ==========================================================================
     // INTERNAL HELPERS
     // ==========================================================================

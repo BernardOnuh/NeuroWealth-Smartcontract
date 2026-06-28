@@ -400,6 +400,38 @@ gates in `tests/test_budget.rs`.
 Cross-contract operations (Blend supply/withdraw) cost roughly 3× a simple
 deposit because each `invoke_contract` carries its own CPU and memory overhead.
 
+## Idle vs Deployed Asset Tracking (Issue #321)
+
+The vault distinguishes between two components of its total managed value:
+
+| Component | Getter | Description |
+|---|---|---|
+| **Idle** | `get_idle_balance()` | USDC held directly in the vault contract, not yet deployed to any protocol. |
+| **Deployed** | `get_deployed_assets()` | USDC currently supplied to an external yield protocol (e.g., Blend, DEX). |
+
+Both values are also available in a single atomic call via `get_asset_breakdown()`, which returns `(idle, deployed)` — useful for dashboards and AI agents that need both figures without two separate RPC round-trips.
+
+### How idle balance changes
+
+- **Increases** on `deposit()` (user transfers USDC into the vault).
+- **Decreases** on `rebalance()` when the agent supplies idle USDC to a protocol.
+- **Increases** on `rebalance()` or `withdraw()` when funds are pulled back from a protocol.
+
+### How deployed assets change
+
+- **Increases** after a successful `rebalance()` into Blend or the DEX.
+- **Decreases** after `rebalance()` to `"none"` (full protocol exit) or after
+  partial/full protocol withdrawals triggered by user redemptions.
+- Returns `0` when `CurrentProtocol` is `"none"` — no funds are deployed.
+
+### Relationship to TotalAssets
+
+`idle + deployed` may differ from `TotalAssets`.  `TotalAssets` is the
+authoritative accounting value used for share pricing and includes accrued yield
+as reported by the agent via `update_total_assets()`.  The live balance getters
+query on-chain token balances directly and therefore represent the current
+on-chain state before any yield reporting adjustment.
+
 ## TotalDeposits vs TotalAssets Relationship (Issue #183)
 
 Two separate values track vault accounting:

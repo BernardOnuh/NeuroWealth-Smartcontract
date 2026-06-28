@@ -949,4 +949,28 @@ export class VaultClient {
     const args: StellarSdk.xdr.ScVal[] = [];
     return this.simulate<number>('get_last_rebalance_ledger', args, sourcePublicKey);
   }
+
+  /**
+   * Get the vault's idle USDC balance (funds held in the vault, not deployed to any protocol)
+   */
+  async get_idle_balance(sourcePublicKey: string): Promise<bigint> {
+    const args: StellarSdk.xdr.ScVal[] = [];
+    return this.simulate<bigint>('get_idle_balance', args, sourcePublicKey);
+  }
+
+  /**
+   * Get the amount of USDC currently deployed to an external yield protocol
+   */
+  async get_deployed_assets(sourcePublicKey: string): Promise<bigint> {
+    const args: StellarSdk.xdr.ScVal[] = [];
+    return this.simulate<bigint>('get_deployed_assets', args, sourcePublicKey);
+  }
+
+  /**
+   * Get the vault's asset breakdown as (idle, deployed) in a single call
+   */
+  async get_asset_breakdown(sourcePublicKey: string): Promise<unknown> {
+    const args: StellarSdk.xdr.ScVal[] = [];
+    return this.simulate<unknown>('get_asset_breakdown', args, sourcePublicKey);
+  }
 }
