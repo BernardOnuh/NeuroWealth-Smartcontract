@@ -3,7 +3,8 @@
 extern crate std;
 
 use super::utils::*;
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
+use crate::{EmergencyPausedEvent, VaultPausedEvent, TOPIC_EMERGENCY_PAUSED, TOPIC_PAUSED};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, TryFromVal};
 
 #[test]
 fn test_owner_can_pause() {
@@ -150,12 +151,13 @@ fn test_pause_emits_event() {
 
     client.pause(&owner);
 
-    let pause_events = find_events_by_topic(
-        env.events().all(),
-        &env,
-        soroban_sdk::symbol_short!("paused"),
-    );
-    assert!(!pause_events.is_empty(), "Pause should emit an event");
+    let pause_events = find_events_by_topic(env.events().all(), &env, TOPIC_PAUSED);
+    assert_eq!(pause_events.len(), 1, "Exactly one paused event should be emitted");
+
+    let (_, _, data) = &pause_events[0];
+    let event = VaultPausedEvent::try_from_val(&env, data)
+        .expect("Should be a valid VaultPausedEvent");
+    assert_eq!(event.owner, owner, "Event owner should match caller");
 }
 
 #[test]
@@ -168,15 +170,16 @@ fn test_emergency_pause_emits_event() {
 
     client.emergency_pause(&owner);
 
-    let emergency_events = find_events_by_topic(
-        env.events().all(),
-        &env,
-        soroban_sdk::symbol_short!("emerg"),
+    let emergency_events = find_events_by_topic(env.events().all(), &env, TOPIC_EMERGENCY_PAUSED);
+    assert_eq!(
+        emergency_events.len(), 1,
+        "Exactly one emergency paused event should be emitted"
     );
-    assert!(
-        !emergency_events.is_empty(),
-        "Emergency pause should emit an event"
-    );
+
+    let (_, _, data) = &emergency_events[0];
+    let event = EmergencyPausedEvent::try_from_val(&env, data)
+        .expect("Should be a valid EmergencyPausedEvent");
+    assert_eq!(event.owner, owner, "Event owner should match caller");
 }
 
 // ============================================================================

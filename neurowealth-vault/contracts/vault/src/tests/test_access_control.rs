@@ -7,7 +7,8 @@
 //! - Paused-state enforcement on user operations
 
 use super::utils::*;
-use soroban_sdk::{symbol_short, testutils::Address as _, Address, BytesN, Env};
+use crate::{AgentUpdatedEvent, TOPIC_AGENT_UPDATED};
+use soroban_sdk::{symbol_short, testutils::Address as _, Address, BytesN, Env, TryFromVal};
 
 // ============================================================================
 // OWNER-ONLY HAPPY PATHS
@@ -115,17 +116,20 @@ fn test_update_agent_emits_event() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (contract_id, _old_agent, _owner, _usdc_token) = setup_vault_with_token(&env);
+    let (contract_id, old_agent, _owner, _usdc_token) = setup_vault_with_token(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
     let new_agent = Address::generate(&env);
     client.update_agent(&new_agent);
 
-    let agent_events = find_events_by_topic(env.events().all(), &env, symbol_short!("agent"));
-    assert!(
-        !agent_events.is_empty(),
-        "update_agent should emit an event"
-    );
+    let agent_events = find_events_by_topic(env.events().all(), &env, TOPIC_AGENT_UPDATED);
+    assert_eq!(agent_events.len(), 1, "Exactly one agent event should be emitted");
+
+    let (_, _, data) = &agent_events[0];
+    let event = AgentUpdatedEvent::try_from_val(&env, data)
+        .expect("Should be a valid AgentUpdatedEvent");
+    assert_eq!(event.old_agent, old_agent, "old_agent should match previous agent");
+    assert_eq!(event.new_agent, new_agent, "new_agent should match updated agent");
 }
 
 #[test]

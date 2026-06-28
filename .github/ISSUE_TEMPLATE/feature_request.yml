@@ -1,0 +1,86 @@
+name: Feature Request
+description: Propose a new capability or enhancement
+title: "Feature: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Review [CONTRIBUTING.md](../CONTRIBUTING.md) and [ARCHITECTURE.md](../ARCHITECTURE.md) before submitting.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature Description
+      description: A clear and concise description of the feature and what it does.
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Use Case and Motivation
+      description: Why is this needed? What problem does it solve?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: network
+    attributes:
+      label: Target Soroban Network
+      description: Which network is this feature primarily relevant for?
+      options:
+        - All networks
+        - Devnet only
+        - Testnet
+        - Mainnet
+    validations:
+      required: true
+
+  - type: input
+    id: contract_id
+    attributes:
+      label: Contract ID (if applicable)
+      description: The contract this feature targets, if known.
+      placeholder: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4"
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe your implementation approach — architecture, data structures, new functions, etc.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternative Approaches
+      description: Other solutions considered and their trade-offs.
+
+  - type: textarea
+    id: security
+    attributes:
+      label: Security Considerations
+      description: |
+        Access control, state changes, attack vectors, error handling.
+        Reference [SECURITY.md](../SECURITY.md) and [ERROR_STYLE_GUIDE.md](../ERROR_STYLE_GUIDE.md).
+
+  - type: textarea
+    id: test_output
+    attributes:
+      label: Relevant Test Output (if prototyping)
+      description: Paste any `cargo test` output relevant to this feature, if you have a prototype.
+      render: shell
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have reviewed [CONTRIBUTING.md](../CONTRIBUTING.md)
+          required: true
+        - label: I have reviewed [ARCHITECTURE.md](../ARCHITECTURE.md)
+          required: false
+        - label: I have considered security implications
+          required: false
