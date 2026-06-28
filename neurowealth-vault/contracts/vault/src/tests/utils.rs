@@ -1,4 +1,11 @@
 //! Shared test utilities for NeuroWealth Vault tests
+//!
+//! # Token Mock
+//!
+//! [`token::TestToken`] / [`TestTokenClient`] is the **single canonical mock token**
+//! used across all unit and integration tests.  No other test module should define
+//! its own token contract — import this one via `use super::utils::*;` instead.
+//! Closes issue #288.
 
 extern crate std;
 

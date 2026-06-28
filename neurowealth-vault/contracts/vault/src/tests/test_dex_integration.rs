@@ -118,7 +118,7 @@ fn test_rebalance_dex_without_pool_configured_panics() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #47)")]
+#[should_panic(expected = "Error(Contract, #28)")]
 fn test_set_dex_pool_non_owner_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -127,7 +127,7 @@ fn test_set_dex_pool_non_owner_panics() {
     let vault_client = NeuroWealthVaultClient::new(&env, &vault_id);
 
     let stranger = Address::generate(&env);
-    // OnlyOwnerCanSetDexPool (#47).
+    // OnlyOwnerCanConfigurePool (#28).
     vault_client.set_dex_pool(&stranger, &dex_pool);
 }
 
@@ -216,13 +216,6 @@ fn test_user_withdraw_pulls_from_dex() {
 /// cannot inflate vault accounting.
 #[test]
 fn test_dex_balance_delta_against_lying_pool() {
-// Issue #342 — Test partial-fill rebalance into DEX pool
-//
-// Ensures the vault accounts for the *actual* amount accepted by the DEX pool
-// (balance-delta) rather than the originally requested amount, when the pool
-// accepts only part of the supplied liquidity.
-#[test]
-fn test_dex_partial_fill_rebalance_accounts_for_actual_amount() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -241,7 +234,7 @@ fn test_dex_partial_fill_rebalance_accounts_for_actual_amount() {
     let lying_reported = deposit_amount * 2;
     dex_client.set_reported_supply_amount(&lying_reported);
 
-    // Rebalance into DEX. min_out uses the real amount; no MinOutNotMet.
+    // Rebalance into DEX. min_out = 0 so no MinOutNotMet.
     vault_client.rebalance(&Symbol::new(&env, "dex"), &850, &0_i128);
 
     // The vault's recorded total_assets must reflect the actual balance delta
@@ -256,6 +249,25 @@ fn test_dex_partial_fill_rebalance_accounts_for_actual_amount() {
     assert_eq!(token_client.balance(&dex_pool), deposit_amount);
     // The vault holds nothing — all USDC was transferred out.
     assert_eq!(token_client.balance(&vault_id), 0);
+}
+
+// Issue #342 — Test partial-fill rebalance into DEX pool
+//
+// Ensures the vault accounts for the *actual* amount accepted by the DEX pool
+// (balance-delta) rather than the originally requested amount, when the pool
+// accepts only part of the supplied liquidity.
+#[test]
+fn test_dex_partial_fill_rebalance_accounts_for_actual_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (vault_id, _agent, owner, usdc_token, dex_pool) = setup_vault_with_token_and_dex(&env);
+    let vault_client = NeuroWealthVaultClient::new(&env, &vault_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+    let dex_client = MockDexPoolClient::new(&env, &dex_pool);
+
+    vault_client.set_dex_pool(&owner, &dex_pool);
+
     // Mint 100 USDC into the vault.
     let requested_amount: i128 = 100_000_000; // 100 USDC
     token_client.mint(&vault_id, &requested_amount);
@@ -282,6 +294,6 @@ fn test_dex_partial_fill_rebalance_accounts_for_actual_amount() {
         "Vault should retain the portion not accepted by the DEX pool"
     );
 
-    // The protocol is still tracked as \"dex\" (rebalance succeeded with partial fill).
+    // The protocol is still tracked as "dex" (rebalance succeeded with partial fill).
     assert_eq!(vault_client.get_current_protocol(), Symbol::new(&env, "dex"));
 }

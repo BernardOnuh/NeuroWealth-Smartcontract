@@ -10,7 +10,7 @@
 //! - Only the owner can propose, confirm, or cancel.
 
 use super::utils::*;
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env};
 
 /// A successful propose stores the pending agent and emits the proposal event.
 #[test]
@@ -41,7 +41,7 @@ fn test_propose_agent_stores_pending_and_emits_event() {
 
 /// Proposing while another proposal is pending must be rejected.
 #[test]
-#[should_panic(expected = "Error(Contract, #49)")]
+#[should_panic(expected = "Error(Contract, #48)")]
 fn test_propose_while_pending_rejected() {
     let env = Env::default();
     env.mock_all_auths();
@@ -53,13 +53,13 @@ fn test_propose_while_pending_rejected() {
     let new_agent2 = Address::generate(&env);
 
     client.update_agent(&new_agent1);
-    // Second proposal while first is pending must panic with AgentUpdateAlreadyPending (49).
+    // Second proposal while first is pending must panic with AgentUpdateAlreadyPending (48).
     client.update_agent(&new_agent2);
 }
 
 /// Confirming before the timelock has elapsed must be rejected.
 #[test]
-#[should_panic(expected = "Error(Contract, #51)")]
+#[should_panic(expected = "Error(Contract, #50)")]
 fn test_confirm_before_timelock_rejected() {
     let env = Env::default();
     env.mock_all_auths();
@@ -168,9 +168,9 @@ fn test_new_proposal_allowed_after_cancel() {
     assert!(client.get_pending_agent_update().is_some());
 }
 
-/// Confirm with no pending proposal must be rejected with NoAgentUpdatePending (50).
+/// Confirm with no pending proposal must be rejected with NoAgentUpdatePending (49).
 #[test]
-#[should_panic(expected = "Error(Contract, #50)")]
+#[should_panic(expected = "Error(Contract, #49)")]
 fn test_confirm_with_no_pending_rejected() {
     let env = Env::default();
     env.mock_all_auths();
@@ -181,9 +181,9 @@ fn test_confirm_with_no_pending_rejected() {
     client.confirm_agent_update();
 }
 
-/// Cancel with no pending proposal must be rejected with NoAgentUpdatePending (50).
+/// Cancel with no pending proposal must be rejected with NoAgentUpdatePending (49).
 #[test]
-#[should_panic(expected = "Error(Contract, #50)")]
+#[should_panic(expected = "Error(Contract, #49)")]
 fn test_cancel_with_no_pending_rejected() {
     let env = Env::default();
     env.mock_all_auths();

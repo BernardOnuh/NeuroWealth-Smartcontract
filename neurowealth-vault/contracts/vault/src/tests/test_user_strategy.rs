@@ -67,7 +67,7 @@ fn test_strategies_are_independent_per_user() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #48)")]
+#[should_panic(expected = "Error(Contract, #47)")]
 fn test_invalid_strategy_rejected() {
     let env = Env::default();
     env.mock_all_auths();
@@ -149,7 +149,7 @@ fn test_set_strategy_emits_event() {
         .expect("Should be a valid UserStrategyUpdatedEvent");
     assert_eq!(event.user, user, "Event user should match caller");
     assert_eq!(
-        event.strategy,
+        event.new_strategy,
         Symbol::new(&env, "conservative"),
         "Event strategy should match set value"
     );
