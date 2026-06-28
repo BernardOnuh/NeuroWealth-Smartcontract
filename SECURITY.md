@@ -64,11 +64,12 @@ Users can withdraw their USDC at any time without:
 
 ## Risk Analysis
 
-### 1. External Protocol Risk (Blend)
+### 1. External Protocol Risk (Blend & DEX)
 
-Integration with protocols like Blend introduces systemic risk:
-- **Liquidity Risk**: If Blend utilization is 100%, the vault cannot pull funds immediately. Users will experience partial withdrawals until liquidity returns to the protocol.
-- **Protocol Failure**: A bug or exploit in Blend could result in loss of deployed assets.
+The vault can route idle USDC into external protocols (`get_current_protocol` reports `idle`, `blend`, or `dex`). Each integration introduces systemic risk:
+- **Liquidity Risk (Blend)**: If Blend utilization is 100%, the vault cannot pull funds immediately. Users will experience partial withdrawals until liquidity returns to the protocol.
+- **Slippage & Liquidity Risk (DEX)**: When the active strategy is a DEX pool, withdrawals and strategy switches execute swaps. Thin pool liquidity can cause slippage or a failed switch; the low-liquidity strategy-switch path returns funds to idle rather than forcing an unfavorable swap.
+- **Protocol Failure**: A bug or exploit in Blend or the DEX could result in loss of deployed assets.
 
 ### 2. Asset Reporting Risk
 
@@ -76,11 +77,24 @@ The `update_total_assets` function used by the AI agent has built-in guardrails:
 - **Solvency Check**: The agent cannot inflate total assets beyond the combined balance of idle USDC and funds actually deployed to external protocols.
 - **Decrease Bounding**: Reporting a loss is capped (default 10% per call) to prevent sudden, massive devaluations from a single malicious or erroneous call.
 
-### 3. Upgrade Risks
+### 3. Agent Rebalance Risk
+
+The AI agent can move funds between protocols via `rebalance()`, but is constrained:
+- **Rebalance Cooldown**: Consecutive rebalances are rate-limited by a configurable cooldown (`get_rebalance_cooldown` / `get_last_rebalance_ledger`), which bounds how quickly a compromised or malfunctioning agent can churn funds across protocols.
+- **No Direct Custody**: Rebalancing only moves funds between the vault's own positions in whitelisted pools; the agent cannot redirect funds to an arbitrary address.
+
+### 4. Upgrade Risks
 
 The contract owner can upgrade the contract code. This introduces:
 - **Single Point of Failure**: The owner key is a high-value target.
 - **Mitigation**: Use multi-sig for the owner and timelocks for code upgrades.
+
+### 5. State Rent & TTL Expiry
+
+Soroban persistent entries (such as each user's `Shares` record) accrue state rent and expire if their TTL is not periodically extended:
+- **Pure Read-Only Getters**: `get_balance` and `get_shares` are side-effect free — they do **not** extend storage TTL. This keeps pure reads cheap and prevents read traffic from silently mutating ledger state.
+- **Explicit Maintenance**: Off-chain indexers or maintenance jobs should call the permissionless `touch_user_ttl(user)` to refresh a user's `Shares` TTL. State-changing calls (`deposit`, `withdraw`) already rewrite `Shares` and refresh its TTL during normal operation.
+- **Risk**: A long-dormant user who never transacts and whose entry is never touched could see their `Shares` entry expire and require restoration. Active users, and any indexer running `touch_user_ttl`, are unaffected.
 
 ## Access Control Summary
 
@@ -96,6 +110,11 @@ The contract owner can upgrade the contract code. This introduces:
 | unpause | ✅ | - | - | - |
 | set_caps | ✅ | - | - | - |
 | upgrade | ✅ | - | - | - |
+| set_blend_pool | ✅ | - | - | - |
+| set_dex_pool | ✅ | - | - | - |
+| transfer_ownership | ✅ | - | - | - |
+| accept_ownership | - | - | - | pending owner |
+| touch_user_ttl | - | - | - | ✅ |
 
 ## Security Best Practices Implemented
 
