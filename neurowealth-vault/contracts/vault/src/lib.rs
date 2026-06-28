@@ -784,33 +784,15 @@ const USER_SHARES_TTL_EXTEND_TO: u32 = 100;
 /// `current_ledger_sequence + BlendApprovalTtl`.
 const DEFAULT_BLEND_APPROVAL_TTL: u32 = 100_000;
 
-pub(crate) const TOPIC_INIT: Symbol = symbol_short!("init");
-pub(crate) const TOPIC_DEPOSIT: Symbol = symbol_short!("deposit");
-pub(crate) const TOPIC_WITHDRAW: Symbol = symbol_short!("withdraw");
-pub(crate) const TOPIC_REBALANCE: Symbol = symbol_short!("rebalance");
-pub(crate) const TOPIC_PAUSED: Symbol = symbol_short!("paused");
-pub(crate) const TOPIC_UNPAUSED: Symbol = symbol_short!("unpaused");
-pub(crate) const TOPIC_EMERGENCY_PAUSED: Symbol = symbol_short!("emerg");
-pub(crate) const TOPIC_TVL_CAP_UPDATED: Symbol = symbol_short!("tvl_cap");
-pub(crate) const TOPIC_USER_CAP_UPDATED: Symbol = symbol_short!("user_cap");
-pub(crate) const TOPIC_LIMITS_UPDATED: Symbol = symbol_short!("l_upd");
-pub(crate) const TOPIC_DEPOSIT_LIMITS_UPDATED: Symbol = symbol_short!("dep_lim");
-pub(crate) const TOPIC_CAPS_UPDATED: Symbol = symbol_short!("caps_upd");
-pub(crate) const TOPIC_AGENT_UPDATED: Symbol = symbol_short!("agent");
-pub(crate) const TOPIC_OWNERSHIP_INITIATED: Symbol = symbol_short!("own_init");
-pub(crate) const TOPIC_OWNERSHIP_TRANSFERRED: Symbol = symbol_short!("own_xfer");
-pub(crate) const TOPIC_OWNERSHIP_CANCELLED: Symbol = symbol_short!("own_cncl");
-pub(crate) const TOPIC_ASSETS_UPDATED: Symbol = symbol_short!("assets");
-pub(crate) const TOPIC_UPGRADED: Symbol = symbol_short!("upgraded");
-pub(crate) const TOPIC_BLEND_SUPPLY: Symbol = symbol_short!("blend_sup");
-pub(crate) const TOPIC_BLEND_WITHDRAW: Symbol = symbol_short!("blend_wd");
-pub(crate) const TOPIC_BLEND_POOL_CONFIGURED: Symbol = symbol_short!("blend_cfg");
-pub(crate) const TOPIC_DEX_SUPPLY: Symbol = symbol_short!("dex_sup");
-pub(crate) const TOPIC_DEX_WITHDRAW: Symbol = symbol_short!("dex_wd");
-pub(crate) const TOPIC_DEX_POOL_CONFIGURED: Symbol = symbol_short!("dex_cfg");
-pub(crate) const TOPIC_PROTOCOL_CHANGED: Symbol = symbol_short!("proto_chg");
-pub(crate) const TOPIC_USER_STRATEGY_UPDATED: Symbol = symbol_short!("usr_strat");
-pub(crate) const TOPIC_REBALANCE_FAILED: Symbol = symbol_short!("reb_fail");
+use topics::{
+    TOPIC_AGENT_UPDATED, TOPIC_ASSETS_UPDATED, TOPIC_BLEND_POOL_CONFIGURED, TOPIC_BLEND_SUPPLY,
+    TOPIC_BLEND_WITHDRAW, TOPIC_CAPS_UPDATED, TOPIC_DEPOSIT, TOPIC_DEPOSIT_LIMITS_UPDATED,
+    TOPIC_DEX_POOL_CONFIGURED, TOPIC_DEX_SUPPLY, TOPIC_DEX_WITHDRAW, TOPIC_EMERGENCY_PAUSED,
+    TOPIC_INIT, TOPIC_LIMITS_UPDATED, TOPIC_OWNERSHIP_CANCELLED, TOPIC_OWNERSHIP_INITIATED,
+    TOPIC_OWNERSHIP_TRANSFERRED, TOPIC_PAUSED, TOPIC_PROTOCOL_CHANGED, TOPIC_REBALANCE,
+    TOPIC_REBALANCE_FAILED, TOPIC_TVL_CAP_UPDATED, TOPIC_UNPAUSED, TOPIC_UPGRADED,
+    TOPIC_USER_CAP_UPDATED, TOPIC_USER_STRATEGY_UPDATED, TOPIC_WITHDRAW,
+};
 
 impl BlendPoolClient {
     /// Deposits assets to the Blend pool.
