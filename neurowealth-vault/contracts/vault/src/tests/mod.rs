@@ -29,6 +29,7 @@ mod test_rebalance_integration;
 mod test_require_initialized;
 mod test_rounding_math;
 mod test_rounding_small_amounts;
+mod test_share_conversion_proptest;
 mod test_shares;
 mod test_strategy_switch_low_liquidity;
 mod test_total_assets_cap;
