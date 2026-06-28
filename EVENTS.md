@@ -136,6 +136,18 @@ pub struct ProtocolChangedEvent {
 **Usage:**
 - Indexers record explicit protocol state transitions without inferring from rebalance events alone
 
+### 4b. RebalanceFailedEvent
+**Topic:** `"reb_fail"`
+
+Emitted when a rebalance exits a protocol but the withdrawal leg leaves a non-zero balance behind (incomplete exit).
+
+```rust
+pub struct RebalanceFailedEvent {
+    pub from_protocol: Symbol,  // The protocol the vault was trying to exit
+    pub reason: Symbol,         // Short reason code ("exit_fail" = incomplete withdrawal)
+}
+```
+
 ## Administrative Events
 
 ### 5. VaultPausedEvent
@@ -161,7 +173,7 @@ pub struct VaultUnpausedEvent {
 ```
 
 ### 7. EmergencyPausedEvent
-**Topic:** `"emergency"`
+**Topic:** `"emerg"`
 
 Emitted when the vault is emergency paused by the agent.
 
@@ -172,7 +184,7 @@ pub struct EmergencyPausedEvent {
 ```
 
 ### 8. LimitsUpdatedEvent
-**Topic:** `"limits"`
+**Topic:** `"l_upd"`
 
 Emitted when per-transaction deposit limits are updated.
 
@@ -189,7 +201,21 @@ pub struct LimitsUpdatedEvent {
 }
 ```
 
-### 8a. TvlCapUpdatedEvent
+### 8a. DepositLimitsUpdatedEvent
+**Topic:** `"dep_lim"`
+
+Emitted when per-transaction deposit limits are updated via `set_deposit_limits`. This is the current, unambiguous replacement for the legacy `LimitsUpdatedEvent` topic above.
+
+```rust
+pub struct DepositLimitsUpdatedEvent {
+    pub old_min: i128,    // Previous minimum deposit limit
+    pub new_min: i128,    // New minimum deposit limit
+    pub old_max: i128,    // Previous maximum deposit limit
+    pub new_max: i128,    // New maximum deposit limit
+}
+```
+
+### 8b. TvlCapUpdatedEvent
 **Topic:** `"tvl_cap"`
 
 Emitted when the vault's total TVL cap is updated.
@@ -201,7 +227,7 @@ pub struct TvlCapUpdatedEvent {
 }
 ```
 
-### 8b. UserDepositCapUpdatedEvent
+### 8c. UserDepositCapUpdatedEvent
 **Topic:** `"user_cap"`
 
 Emitted when the per-user deposit cap is updated.
@@ -213,7 +239,7 @@ pub struct UserDepositCapUpdatedEvent {
 }
 ```
 
-### 8c. CapsUpdatedEvent
+### 8d. CapsUpdatedEvent
 **Topic:** `"caps_upd"`
 
 Emitted when user deposit and TVL caps are updated in a single transaction via `set_caps`.
@@ -249,6 +275,19 @@ Emitted when total assets are updated (yield accrual).
 pub struct AssetsUpdatedEvent {
     pub old_total: i128,   // Previous total assets
     pub new_total: i128,   // New total assets
+}
+```
+
+### 10a. UserStrategyUpdatedEvent
+**Topic:** `"usr_strat"`
+
+Emitted when a user updates their investment strategy preference.
+
+```rust
+pub struct UserStrategyUpdatedEvent {
+    pub user: Address,          // The user who updated their strategy
+    pub old_strategy: Symbol,   // Previous strategy symbol ("conservative", "balanced", "growth", or "")
+    pub new_strategy: Symbol,   // New strategy symbol
 }
 ```
 
@@ -299,9 +338,9 @@ Emitted when assets are supplied to Blend protocol.
 
 ```rust
 pub struct BlendSupplyEvent {
-    pub asset: Address,   // Asset address (USDC)
-    pub amount: i128,     // Amount supplied
-    pub success: bool,    // Whether supply succeeded
+    pub asset: Address,         // Asset address (USDC)
+    pub amount_actual: i128,    // Actual amount transferred to Blend (may be less than requested due to pool limits)
+    pub success: bool,          // Whether supply succeeded
 }
 ```
 
@@ -312,10 +351,9 @@ Emitted when assets are withdrawn from Blend protocol.
 
 ```rust
 pub struct BlendWithdrawEvent {
-    pub asset: Address,           // Asset address (USDC)
-    pub requested_amount: i128,   // Amount requested to withdraw
-    pub amount_received: i128,    // Amount actually received
-    pub success: bool,            // Whether withdrawal succeeded
+    pub asset: Address,         // Asset address (USDC)
+    pub amount_actual: i128,    // Actual amount received from Blend (may be less than requested due to pool liquidity)
+    pub success: bool,          // Whether withdrawal succeeded
 }
 ```
 
