@@ -139,7 +139,91 @@ These patterns may indicate manipulation, insider abuse, or a compromised key.
 
 ---
 
-## 6. Ledger-to-Time Conversion Reference
+## 6. DEX-Specific Monitoring
+
+When `CurrentProtocol == "dex"`, the following additional signals should be tracked
+alongside the routine signals in section 1.
+
+### Metrics
+
+| Signal | How to Measure | Healthy Range |
+|--------|----------------|---------------|
+| DEX position balance | `get_balance(vault_id)` on DEX pool contract | Matches expected deployed amount ± slippage |
+| Rebalance slippage | `(amount_intended - amount_actual) / amount_intended` in `dex_sup` event | < configured `min_out` floor |
+| Stuck liquidity | `balance` on DEX pool unchanged across multiple rebalance cycles | Should decrease to 0 after successful exit |
+| Pool address validity | `get_dex_pool()` returns expected address | Non-null and matches configured pool |
+
+### Alert Conditions
+
+```
+ALERT: dex_position_mismatch
+  condition: DexPool.balance(vault_id) != expected_deployed_amount (±1%)
+  severity: high
+  action: Audit rebalance events; check for partial fill or pool accounting bug
+
+ALERT: dex_abnormal_slippage
+  condition: dex_sup event amount_actual < amount_intended * 0.99
+             AND min_out was not triggered
+  severity: medium
+  action: Review pool depth; consider raising min_out or switching protocol
+
+ALERT: dex_stuck_liquidity
+  condition: CurrentProtocol == "none" AND DexPool.balance(vault_id) > 0
+  severity: high
+  action: Pool may not have fully returned funds on exit; check remove_liquidity
+          return value and retry rebalance to "none"
+
+ALERT: dex_pool_not_configured
+  condition: get_dex_pool() returns None AND rebalance to "dex" attempted
+  severity: critical
+  action: Owner must call set_dex_pool() before DEX rebalances can proceed
+
+ALERT: dex_supply_failed
+  condition: dex_sup event emitted with success = false
+  severity: high
+  action: Pool rejected supply (cap hit or zero liquidity); rebalance to "none"
+          or wait for pool capacity to recover
+```
+
+### Diagnosing Stuck DEX Liquidity
+
+If a rebalance exit from DEX is suspected to have left funds in the pool:
+
+```bash
+# 1. Check on-chain protocol state
+stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet \
+  -- get_current_protocol
+
+# 2. Query pool balance directly
+stellar contract invoke --id $DEX_POOL_ADDRESS --network mainnet \
+  -- balance --asset $USDC_ADDRESS --user $VAULT_CONTRACT_ID
+
+# 3. Look for dex_wd events and their actual amounts
+stellar events --network mainnet --start-ledger <RECENT_LEDGER> \
+  --contract-id $VAULT_CONTRACT_ID | grep dex_wd
+```
+
+If `get_current_protocol` returns `"none"` but the DEX pool still holds a
+non-zero balance for the vault, the exit leg completed from the vault's
+perspective but the pool accounting drifted. Retry `rebalance("none", 0, 0)`;
+if the pool still reports a balance after that, escalate to the pool operator.
+
+### Misconfigured Pool Address
+
+A pool address set to a contract that does not implement `add_liquidity`,
+`remove_liquidity`, and `balance` will cause the first `rebalance("dex", ...)` to
+panic. Validate the pool address off-chain before calling `set_dex_pool()`:
+
+```bash
+stellar contract invoke --id $PROPOSED_DEX_POOL --network mainnet \
+  -- balance --asset $USDC_ADDRESS --user $VAULT_CONTRACT_ID
+```
+
+A successful (even zero) response confirms the interface is compatible.
+
+---
+
+## 7. Ledger-to-Time Conversion Reference
 
 Soroban does not expose wall-clock time natively. Use ledger sequence as a proxy.
 
