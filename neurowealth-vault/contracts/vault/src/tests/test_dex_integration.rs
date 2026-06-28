@@ -216,6 +216,13 @@ fn test_user_withdraw_pulls_from_dex() {
 /// cannot inflate vault accounting.
 #[test]
 fn test_dex_balance_delta_against_lying_pool() {
+// Issue #342 — Test partial-fill rebalance into DEX pool
+//
+// Ensures the vault accounts for the *actual* amount accepted by the DEX pool
+// (balance-delta) rather than the originally requested amount, when the pool
+// accepts only part of the supplied liquidity.
+#[test]
+fn test_dex_partial_fill_rebalance_accounts_for_actual_amount() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -249,4 +256,32 @@ fn test_dex_balance_delta_against_lying_pool() {
     assert_eq!(token_client.balance(&dex_pool), deposit_amount);
     // The vault holds nothing — all USDC was transferred out.
     assert_eq!(token_client.balance(&vault_id), 0);
+    // Mint 100 USDC into the vault.
+    let requested_amount: i128 = 100_000_000; // 100 USDC
+    token_client.mint(&vault_id, &requested_amount);
+
+    // Cap the pool to accept at most 60 USDC — a partial fill.
+    let pool_cap: i128 = 60_000_000; // 60 USDC
+    dex_client.set_max_supply_limit(&pool_cap);
+
+    // Rebalance with min_out = 0 so slippage guard does not block a partial fill.
+    vault_client.rebalance(&Symbol::new(&env, "dex"), &850, &0_i128);
+
+    // The pool accepted only 60 USDC; the vault retains the remaining 40 USDC.
+    let actual_supplied = pool_cap;
+    let remaining_in_vault = requested_amount - actual_supplied;
+
+    assert_eq!(
+        token_client.balance(&dex_pool),
+        actual_supplied,
+        "DEX pool balance should equal the actual (partial) fill amount"
+    );
+    assert_eq!(
+        token_client.balance(&vault_id),
+        remaining_in_vault,
+        "Vault should retain the portion not accepted by the DEX pool"
+    );
+
+    // The protocol is still tracked as \"dex\" (rebalance succeeded with partial fill).
+    assert_eq!(vault_client.get_current_protocol(), Symbol::new(&env, "dex"));
 }

@@ -1,7 +1,8 @@
 //! Tests for per-user investment strategy preference (Issue #227)
 
 use super::utils::*;
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, Symbol};
+use crate::{UserStrategyUpdatedEvent, TOPIC_USER_STRATEGY_UPDATED};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, Symbol, TryFromVal};
 
 fn setup(
     env: &Env,
@@ -136,11 +137,20 @@ fn test_set_strategy_emits_event() {
 
     client.set_user_strategy(&user, &Symbol::new(&env, "conservative"));
 
-    let events = env.events().all();
     let strategy_events = find_events_by_topic(
-        events,
+        env.events().all(),
         &env,
-        soroban_sdk::symbol_short!("usr_strat"),
+        TOPIC_USER_STRATEGY_UPDATED,
     );
-    assert!(!strategy_events.is_empty(), "should emit usr_strat event");
+    assert_eq!(strategy_events.len(), 1, "Exactly one usr_strat event should be emitted");
+
+    let (_, _, data) = &strategy_events[0];
+    let event = UserStrategyUpdatedEvent::try_from_val(&env, data)
+        .expect("Should be a valid UserStrategyUpdatedEvent");
+    assert_eq!(event.user, user, "Event user should match caller");
+    assert_eq!(
+        event.strategy,
+        Symbol::new(&env, "conservative"),
+        "Event strategy should match set value"
+    );
 }

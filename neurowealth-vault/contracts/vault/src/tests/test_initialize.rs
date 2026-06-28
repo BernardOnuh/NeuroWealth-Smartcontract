@@ -1,7 +1,8 @@
 //! Tests for vault initialization
 
 use super::utils::*;
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
+use crate::{VaultInitializedEvent, TOPIC_INIT};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, TryFromVal};
 
 #[test]
 fn test_initialize_happy_path() {
@@ -117,12 +118,14 @@ fn test_initialize_emits_event() {
 
     client.initialize(&deployer, &owner, &agent, &usdc_token, &salt);
 
-    let events = env.events().all();
-    assert!(!events.is_empty(), "Initialization should emit an event");
+    let init_events = find_events_by_topic(env.events().all(), &env, TOPIC_INIT);
+    assert_eq!(init_events.len(), 1, "Exactly one init event should be emitted");
 
-    let init_events =
-        find_events_by_topic(env.events().all(), &env, soroban_sdk::symbol_short!("init"));
-    assert!(!init_events.is_empty(), "Should have initialization event");
+    let (_, _, data) = &init_events[0];
+    let event = VaultInitializedEvent::try_from_val(&env, data)
+        .expect("Should be a valid VaultInitializedEvent");
+    assert_eq!(event.agent, agent, "Event agent should match initialized agent");
+    assert_eq!(event.usdc_token, usdc_token, "Event usdc_token should match");
 }
 
 // ============================================================================
@@ -196,8 +199,8 @@ fn test_initialize_event_includes_owner_and_agent() {
     client.initialize(&deployer, &owner, &agent, &usdc_token, &salt);
 
     let init_events =
-        find_events_by_topic(env.events().all(), &env, soroban_sdk::symbol_short!("init"));
-    assert!(!init_events.is_empty(), "init event must be emitted");
+        find_events_by_topic(env.events().all(), &env, TOPIC_INIT);
+    assert_eq!(init_events.len(), 1, "init event must be emitted");
 
     // The event data is VaultInitializedEvent; verify it contains both roles
     // by confirming the stored values match what we passed in.

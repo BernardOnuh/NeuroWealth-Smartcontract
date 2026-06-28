@@ -1,7 +1,8 @@
 //! Tests for withdrawal functionality
 
 use super::utils::*;
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use crate::{WithdrawEvent, TOPIC_WITHDRAW};
+use soroban_sdk::{testutils::Address as _, Address, Env, TryFromVal};
 
 #[test]
 fn test_full_withdrawal_burns_all_shares() {
@@ -154,16 +155,17 @@ fn test_withdraw_emits_event() {
 
     let user = Address::generate(&env);
     let deposit_amount = 10_000_000_i128;
-
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
 
     let withdraw_amount = 3_000_000_i128;
     client.withdraw(&user, &withdraw_amount);
 
-    let withdraw_events = find_events_by_topic(
-        env.events().all(),
-        &env,
-        soroban_sdk::symbol_short!("withdraw"),
-    );
-    assert!(!withdraw_events.is_empty(), "Withdraw should emit an event");
+    let withdraw_events = find_events_by_topic(env.events().all(), &env, TOPIC_WITHDRAW);
+    assert_eq!(withdraw_events.len(), 1, "Exactly one withdraw event should be emitted");
+
+    let (_, _, data) = &withdraw_events[0];
+    let event = WithdrawEvent::try_from_val(&env, data)
+        .expect("Should be a valid WithdrawEvent");
+    assert_eq!(event.user, user, "Event user should match withdrawer");
+    assert_eq!(event.amount, withdraw_amount, "Event amount should match withdrawal");
 }
