@@ -1,0 +1,29 @@
+# contracts/vault/.clippy.toml
+#
+# Clippy configuration for the NeuroWealth Vault contract.
+#
+# The `integer_arithmetic` lint is set to `deny` here so that ANY bare integer
+# arithmetic operator (+, -, *, /) on primitive integer types causes a compile
+# error.  All arithmetic in the contract MUST use:
+#
+#   .checked_add(x).expect("vault: <context> overflow")
+#   .checked_sub(x).expect("vault: <context> underflow")
+#   .checked_mul(x).expect("vault: <context> overflow")
+#   .saturating_add(x)  — only where saturation is the intended semantics
+#   .saturating_sub(x)  — only where saturation is the intended semantics
+#
+# The `overflow-checks = true` flag in Cargo.toml [profile.release] provides
+# a runtime backstop, but this lint enforces the policy at review time so
+# risky paths are caught before they reach main.
+#
+# To add a project-wide exception for a specific pattern, add an entry to
+# the `avoid-breaking-exported-api` or use a targeted `#[allow]` with a
+# comment explaining the safety argument.  DO NOT add a blanket
+# `#[allow(clippy::integer_arithmetic)]` — the CI grep sweep in
+# scripts/check_arithmetic.sh will catch and fail on that.
+
+# Lint levels recognised by .clippy.toml (requires Rust ≥ 1.75).
+# Note: these are advisory — the CI job also passes -D on the command line
+# so the build fails even if this file is out of date.
+[lints.clippy]
+integer_arithmetic = "deny"
