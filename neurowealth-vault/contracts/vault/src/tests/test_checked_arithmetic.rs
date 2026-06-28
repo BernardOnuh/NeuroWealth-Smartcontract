@@ -161,3 +161,49 @@ fn test_update_total_assets_decrease_bound_overflow_is_checked() {
     // Request a decrease: max_decrease = old_total(MAX) * bps(>=100) overflows.
     client.update_total_assets(&agent, &(i128::MAX - 1), &true, &100);
 }
+
+/// `get_exchange_rate` computes `total_assets * SCALAR / total_shares`.
+/// The division is now checked; this test verifies that a normal non-zero
+/// total_shares produces the correct rate without panicking (#318).
+#[test]
+fn test_exchange_rate_checked_div_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token = TestTokenClient::new(&env, &usdc_token);
+
+    let user = Address::generate(&env);
+    let amount = 10_000_000_i128; // 10 USDC
+    token.mint(&user, &amount);
+    client.deposit(&user, &amount);
+
+    // Bootstrap: 1:1, so rate = 10_000_000 (scalar = 10_000_000, rate = 1.0)
+    let rate = client.get_exchange_rate();
+    assert_eq!(rate, 10_000_000_i128, "bootstrap exchange rate should be 1:1 scaled");
+}
+
+/// A small but valid decrease within bps bounds uses `.checked_div(10_000)`
+/// and must produce the correct max-decrease ceiling without panicking (#318).
+#[test]
+fn test_update_total_assets_decrease_div_within_bounds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token = TestTokenClient::new(&env, &usdc_token);
+
+    let user = Address::generate(&env);
+    let amount = 10_000_000_i128; // 10 USDC
+    token.mint(&user, &amount);
+    client.deposit(&user, &amount);
+
+    // max_decrease_bps = 1000 (10 %), old_total = 10M
+    // max_decrease = 10M * 1000 / 10_000 = 1M
+    // new_total = 9M (decrease of 1M = exactly at the 10 % cap) — must succeed
+    let new_total = 9_000_000_i128;
+    client.update_total_assets(&agent, &new_total, &true, &1000);
+    assert_eq!(client.get_total_assets(), new_total);
+}
