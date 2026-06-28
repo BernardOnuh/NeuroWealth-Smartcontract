@@ -20,6 +20,18 @@ stateDiagram-v2
     Active --> Emergency : owner calls emergency_pause()
     Paused --> Emergency : owner calls emergency_pause()
     Emergency --> Active : owner resolves + calls unpause()
+
+    state Rebalancing {
+        [*] --> Idle : CurrentProtocol = "none"
+        [*] --> Blend : CurrentProtocol = "blend"
+        [*] --> DEX   : CurrentProtocol = "dex"
+        Idle --> Blend : rebalance("blend", ...)
+        Idle --> DEX   : rebalance("dex", ...)
+        Blend --> Idle : rebalance("none", ...)
+        Blend --> DEX  : rebalance("dex", ...) — exits Blend first
+        DEX --> Idle   : rebalance("none", ...)
+        DEX --> Blend  : rebalance("blend", ...) — exits DEX first
+    }
 ```
 
 ---
@@ -51,6 +63,11 @@ Funds may be held directly in the vault or deployed via an external protocol
 **Preconditions:**
 - `DataKey::Paused` is either absent or `false`.
 - `DataKey::CurrentProtocol` may be `"blend"`, `"dex"`, or `"none"`.
+
+**DEX sub-state:** When `CurrentProtocol == "dex"` the vault's USDC is
+deployed to a configured DEX liquidity pool. Rebalancing to `"blend"` or
+`"none"` exits the DEX position first (remove_liquidity), then enters the
+target protocol. A failed DEX exit leaves `CurrentProtocol` unchanged.
 
 **Blocked actions:** None — all user and admin operations available.
 
@@ -131,7 +148,9 @@ the vault to `Active`.
 | Key                       | Type     | Description                                  |
 |---------------------------|----------|----------------------------------------------|
 | `DataKey::Paused`         | `bool`   | `true` while vault is paused                 |
-| `DataKey::CurrentProtocol`| `Symbol` | Active deployment target: `"blend"` / `"none"` |
+| `DataKey::CurrentProtocol`| `Symbol` | Active deployment target: `"blend"` / `"dex"` / `"none"` |
 | `DataKey::LastRebalanceLedger` | `u32` | Ledger sequence of last rebalance           |
 | `DataKey::MinRebalanceInterval` | `u32` | Minimum ledgers between rebalances         |
 | `DataKey::TvLCap`         | `i128`   | Maximum TotalAssets the vault will accept    |
+| `DataKey::DexPool`        | `Address`| Configured DEX liquidity pool address (optional) |
+| `DataKey::ApprovalTtl`    | `u32`    | Ledgers added to current sequence for DEX token approvals |

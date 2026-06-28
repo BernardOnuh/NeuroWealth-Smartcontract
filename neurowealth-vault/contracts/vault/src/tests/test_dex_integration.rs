@@ -208,3 +208,45 @@ fn test_user_withdraw_pulls_from_dex() {
     assert_eq!(token_client.balance(&user), withdraw_amount);
     assert_eq!(token_client.balance(&dex_pool), amount - withdraw_amount);
 }
+
+// ─── Issue #346: balance-delta accounting vs lying pool ──────────────────────
+
+/// The vault measures supply outcome via USDC balance delta, not the pool's
+/// return value. A pool that lies about its return value from `add_liquidity`
+/// cannot inflate vault accounting.
+#[test]
+fn test_dex_balance_delta_against_lying_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (vault_id, _agent, owner, usdc_token, dex_pool) = setup_vault_with_token_and_dex(&env);
+    let vault_client = NeuroWealthVaultClient::new(&env, &vault_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+    let dex_client = MockDexPoolClient::new(&env, &dex_pool);
+
+    vault_client.set_dex_pool(&owner, &dex_pool);
+
+    let deposit_amount = 50_000_000_i128;
+    token_client.mint(&vault_id, &deposit_amount);
+
+    // Configure the pool to lie: it will actually transfer `deposit_amount`
+    // but report double that amount as its return value.
+    let lying_reported = deposit_amount * 2;
+    dex_client.set_reported_supply_amount(&lying_reported);
+
+    // Rebalance into DEX. min_out uses the real amount; no MinOutNotMet.
+    vault_client.rebalance(&Symbol::new(&env, "dex"), &850, &0_i128);
+
+    // The vault's recorded total_assets must reflect the actual balance delta
+    // (deposit_amount), not the pool's inflated claim (lying_reported).
+    let total_assets = vault_client.get_total_assets();
+    assert_eq!(
+        total_assets, deposit_amount,
+        "vault must record actual balance delta, not pool's reported amount"
+    );
+
+    // The pool holds exactly the real amount.
+    assert_eq!(token_client.balance(&dex_pool), deposit_amount);
+    // The vault holds nothing — all USDC was transferred out.
+    assert_eq!(token_client.balance(&vault_id), 0);
+}

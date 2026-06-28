@@ -41,6 +41,9 @@ enum DexMockDataKey {
     MaxSupplyLimit,
     /// Configurable max withdraw limit per transaction (0 = no limit)
     MaxWithdrawLimit,
+    /// Override the return value of add_liquidity without changing actual transfer amount.
+    /// When set, add_liquidity reports this value instead of actual_amount.
+    ReportedSupplyOverride,
 }
 
 pub mod token {
@@ -415,7 +418,21 @@ pub mod dex {
                 );
             }
 
-            actual_amount
+            // If a lying override is set, report that instead of the actual amount.
+            let override_amount: Option<i128> = env
+                .storage()
+                .persistent()
+                .get(&DexMockDataKey::ReportedSupplyOverride);
+            override_amount.unwrap_or(actual_amount)
+        }
+
+        /// Makes add_liquidity report `reported` as the return value regardless of
+        /// how much was actually transferred. Used to test that the vault measures
+        /// outcome via balance-delta rather than trusting the pool's return value.
+        pub fn set_reported_supply_amount(env: Env, reported: i128) {
+            env.storage()
+                .persistent()
+                .set(&DexMockDataKey::ReportedSupplyOverride, &reported);
         }
 
         pub fn remove_liquidity(

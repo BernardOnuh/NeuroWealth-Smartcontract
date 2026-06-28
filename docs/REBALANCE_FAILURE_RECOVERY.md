@@ -104,6 +104,50 @@ soroban contract invoke --id $DEX_POOL --network mainnet \
   -- balance --asset $USDC_ADDRESS --user $VAULT_CONTRACT_ID
 ```
 
+### 4. DEX-Specific Diagnostics
+
+When `CurrentProtocol` is or was `"dex"`, use these additional queries.
+
+**Verify the vault's DEX position:**
+
+```bash
+# How much USDC the DEX pool is holding for the vault
+stellar contract invoke --id $DEX_POOL_ADDRESS --network mainnet \
+  -- balance --asset $USDC_ADDRESS --user $VAULT_CONTRACT_ID
+```
+
+A non-zero result when `CurrentProtocol == "none"` means the exit leg transferred
+funds back to the vault but the pool's internal accounting was not updated, or
+the exit was never completed. Retry `rebalance("none", 0, 0)`.
+
+**Check the `dex_sup` and `dex_wd` events for the failed rebalance:**
+
+```bash
+stellar events \
+  --network mainnet \
+  --start-ledger <LEDGER_BEFORE_FAILURE> \
+  --contract-id $VAULT_CONTRACT_ID
+```
+
+Look for:
+- `dex_sup` with `success = false` — the supply leg was rejected (pool cap,
+  zero liquidity, or misreporting adapter).
+- `dex_wd` with `success = false` — the withdrawal leg returned 0 (pool
+  has no withdrawable balance for the vault).
+- Absence of `dex_wd` after a `reb_fail` with `from_protocol = "dex"` —
+  the exit was never attempted (cooldown still active or vault paused).
+
+**Confirm the pool address is still the expected contract:**
+
+```bash
+stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet \
+  -- get_dex_pool
+```
+
+If `None` is returned but `CurrentProtocol` is `"dex"`, the pool address was
+cleared (e.g. by a contract upgrade) after the rebalance was initiated. The
+owner must call `set_dex_pool()` with the correct address before retrying.
+
 ---
 
 ## Retry Steps

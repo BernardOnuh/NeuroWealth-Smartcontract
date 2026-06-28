@@ -669,3 +669,55 @@ fn test_rebalance_min_out_panics_when_pool_returns_less_than_requested() {
 
     client.rebalance(&symbol_short!("blend"), &500_i128, &10_000_000_i128);
 }
+
+// ─── Issue #348: DEX approval expiry ledger-boundary test ────────────────────
+
+/// Mirrors `test_blend_approval_expires_at_next_ledger_after_boundary` for the
+/// DEX approval path. Both Blend and DEX share the same token `approve` expiry
+/// semantics: an approval issued with `expiry_ledger = N` is valid when
+/// `current_ledger <= N` and expires when `current_ledger == N + 1`.
+///
+/// The DEX supply path calls `token.approve(vault, pool, amount, current + ApprovalTtl)`.
+/// We exercise the identical boundary here: set `ApprovalTtl` to its minimum
+/// (1 000 ledgers), issue the approval at `current + 1_000`, assert it is valid
+/// at exactly that ledger, then advance to `current + 1_001` and assert it has
+/// expired.
+#[test]
+fn test_dex_approval_expires_at_next_ledger_after_boundary() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+
+    // MIN_APPROVAL_TTL == 1_000; use the minimum so the boundary is as tight
+    // as the contract allows.
+    let ttl: u32 = 1_000;
+    client.set_approval_ttl(&ttl);
+
+    let from = Address::generate(&env);
+    let spender = Address::generate(&env);
+    let amount = 5_678_i128;
+    let current_ledger = env.ledger().sequence();
+    let approval_ledger = current_ledger.saturating_add(ttl);
+
+    token_client.approve(&from, &spender, &amount, &approval_ledger);
+
+    // Advance to the exact TTL ledger — approval must still be valid.
+    env.ledger().set_sequence_number(approval_ledger);
+    assert_eq!(
+        token_client.allowance(&from, &spender),
+        amount,
+        "DEX approval should remain valid on the exact TTL boundary ledger"
+    );
+
+    // One ledger past the boundary — approval must have expired.
+    env.ledger()
+        .set_sequence_number(approval_ledger.saturating_add(1));
+    assert_eq!(
+        token_client.allowance(&from, &spender),
+        0_i128,
+        "DEX approval should expire once the ledger advances past the TTL boundary"
+    );
+}
