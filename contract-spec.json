@@ -1227,6 +1227,57 @@
       "state_changing": false,
       "storage_type": "instance",
       "query_only": true
+    },
+    {
+      "name": "get_idle_balance",
+      "category": "queries",
+      "access": "public",
+      "description": "Get the vault's idle USDC balance (funds held in the vault, not deployed to any protocol)",
+      "parameters": [
+        {
+          "name": "env",
+          "type": "Env"
+        }
+      ],
+      "returns": "i128",
+      "requires_auth": false,
+      "state_changing": false,
+      "storage_type": "instance",
+      "query_only": true
+    },
+    {
+      "name": "get_deployed_assets",
+      "category": "queries",
+      "access": "public",
+      "description": "Get the amount of USDC currently deployed to an external yield protocol",
+      "parameters": [
+        {
+          "name": "env",
+          "type": "Env"
+        }
+      ],
+      "returns": "i128",
+      "requires_auth": false,
+      "state_changing": false,
+      "storage_type": "instance",
+      "query_only": true
+    },
+    {
+      "name": "get_asset_breakdown",
+      "category": "queries",
+      "access": "public",
+      "description": "Get the vault's asset breakdown as (idle, deployed) in a single call",
+      "parameters": [
+        {
+          "name": "env",
+          "type": "Env"
+        }
+      ],
+      "returns": "(i128, i128)",
+      "requires_auth": false,
+      "state_changing": false,
+      "storage_type": "instance",
+      "query_only": true
     }
   ],
   "events": [
