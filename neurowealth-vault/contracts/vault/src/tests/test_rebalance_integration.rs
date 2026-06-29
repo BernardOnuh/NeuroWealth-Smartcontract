@@ -8,11 +8,14 @@
 //!  - CurrentProtocol storage state correctness
 //!  - Asset accounting invariants
 //!  - Emitted rebalance events
+//!  - Atomicity of protocol exit (Issue #289)
+//!  - ProtocolChangedEvent emission on every CurrentProtocol transition (Issue #290)
+//!  - Canonical deposit → rebalance → yield → withdraw full lifecycle (Issue #291)
 
 extern crate std;
 
 use super::utils::*;
-use crate::{BlendSupplyEvent, BlendWithdrawEvent, RebalanceEvent};
+use crate::{BlendSupplyEvent, BlendWithdrawEvent, ProtocolChangedEvent, RebalanceEvent, RebalanceFailedEvent, TOPIC_PROTOCOL_CHANGED, TOPIC_REBALANCE_FAILED};
 use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, TryFromVal};
 
 // ============================================================================
@@ -756,4 +759,463 @@ fn test_integration_canonical_full_lifecycle_flow() {
     // FINAL CHECK: All invariants hold
     assert_eq!(client.get_total_deposits(), 0);
     assert_eq!(vault_usdc_balance(&env, &usdc_token, &contract_id), 0);
+}
+
+// ============================================================================
+// #289 — REBALANCE ATOMICITY: EXIT FAILURE BLOCKS TRANSITION
+// ============================================================================
+
+/// When the mock Blend pool is configured with a withdrawal limit that prevents
+/// a full exit, `rebalance()` must:
+///  - Emit `RebalanceFailedEvent` with reason "exit_fail"
+///  - NOT update `CurrentProtocol` to the new target
+///  - NOT supply any funds to the new protocol
+///
+/// This test pins the atomicity guarantee: no partial protocol transition occurs.
+#[test]
+fn test_rebalance_exit_failure_blocks_protocol_transition() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let blend_client = MockBlendPoolClient::new(&env, &blend_pool);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    // Set up a DEX pool so the vault could theoretically transition to it
+    let dex_pool = env.register_contract(None, MockDexPool);
+    client.set_dex_pool(&owner, &dex_pool);
+
+    let deposit_amount = 20_000_000_i128; // 20 USDC
+    let user = Address::generate(&env);
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
+
+    // Move funds to Blend
+    client.rebalance(&symbol_short!("blend"), &700_i128, &0_i128);
+    assert_eq!(client.get_current_protocol(), symbol_short!("blend"));
+    assert_eq!(blend_client.supplied(&usdc_token), deposit_amount);
+
+    // Simulate stuck liquidity: only 5 USDC can be withdrawn per call
+    blend_client.set_max_withdraw_limit(&5_000_000_i128);
+
+    // Attempt to switch blend → dex — exit is incomplete, must abort
+    client.rebalance(&symbol_short!("dex"), &1200_i128, &0_i128);
+
+    // CurrentProtocol must remain "blend" — no partial transition
+    assert_eq!(
+        client.get_current_protocol(),
+        symbol_short!("blend"),
+        "CurrentProtocol must not change when Blend exit is incomplete"
+    );
+
+    // Blend must still hold funds (only partial exit occurred)
+    assert!(
+        blend_client.supplied(&usdc_token) > 0,
+        "Blend pool must still hold funds after failed exit"
+    );
+
+    // DEX must have received nothing
+    let dex_client = MockDexPoolClient::new(&env, &dex_pool);
+    assert_eq!(
+        dex_client.balance(&usdc_token, &contract_id),
+        0,
+        "DEX must not receive any funds when protocol exit fails"
+    );
+
+    // RebalanceFailedEvent must be emitted
+    let failed_events = find_events_by_topic(
+        env.events().all(),
+        &env,
+        TOPIC_REBALANCE_FAILED,
+    );
+    assert_eq!(
+        failed_events.len(),
+        1,
+        "Exactly one RebalanceFailedEvent must be emitted on exit failure"
+    );
+
+    let (_, _, data) = &failed_events[0];
+    let failed_event = RebalanceFailedEvent::try_from_val(&env, data)
+        .expect("data should decode to RebalanceFailedEvent");
+    assert_eq!(
+        failed_event.from_protocol,
+        symbol_short!("blend"),
+        "RebalanceFailedEvent.from_protocol must be 'blend'"
+    );
+    assert_eq!(
+        failed_event.reason,
+        symbol_short!("exit_fail"),
+        "RebalanceFailedEvent.reason must be 'exit_fail'"
+    );
+}
+
+/// When the vault is in Blend and the agent calls rebalance("none") but the
+/// Blend exit is incomplete, the vault must remain in Blend state and emit
+/// RebalanceFailedEvent — not silently succeed.
+#[test]
+fn test_rebalance_to_none_exit_failure_does_not_clear_protocol() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let blend_client = MockBlendPoolClient::new(&env, &blend_pool);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let deposit_amount = 15_000_000_i128;
+    let user = Address::generate(&env);
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
+
+    client.rebalance(&symbol_short!("blend"), &600_i128, &0_i128);
+    assert_eq!(client.get_current_protocol(), symbol_short!("blend"));
+
+    // Restrict withdrawal to simulate stuck liquidity
+    blend_client.set_max_withdraw_limit(&1_000_000_i128);
+
+    // Attempt rebalance to none — exit incomplete
+    client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
+
+    // Protocol must remain "blend"
+    assert_eq!(
+        client.get_current_protocol(),
+        symbol_short!("blend"),
+        "CurrentProtocol must not be cleared when Blend exit is incomplete"
+    );
+
+    // Blend still holds the majority of funds
+    assert!(
+        blend_client.supplied(&usdc_token) > 0,
+        "Blend pool must still hold funds"
+    );
+
+    // RebalanceFailedEvent must be emitted
+    let failed_events =
+        find_events_by_topic(env.events().all(), &env, TOPIC_REBALANCE_FAILED);
+    assert_eq!(failed_events.len(), 1);
+
+    let (_, _, data) = &failed_events[0];
+    let failed_event = RebalanceFailedEvent::try_from_val(&env, data)
+        .expect("data should decode to RebalanceFailedEvent");
+    assert_eq!(failed_event.from_protocol, symbol_short!("blend"));
+    assert_eq!(failed_event.reason, symbol_short!("exit_fail"));
+}
+
+// ============================================================================
+// #290 — ProtocolChangedEvent EMITTED ON EVERY CurrentProtocol TRANSITION
+// ============================================================================
+
+/// Every time `CurrentProtocol` changes, a `ProtocolChangedEvent` must be
+/// emitted with correct `old_protocol` and `new_protocol` values.
+///
+/// Covers: none→blend, blend→none, and compound none→blend→none in sequence.
+#[test]
+fn test_protocol_changed_event_emitted_on_every_transition() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let user = Address::generate(&env);
+    mint_and_deposit(&env, &client, &usdc_token, &user, 10_000_000_i128);
+
+    // Transition 1: none → blend
+    client.rebalance(&symbol_short!("blend"), &800_i128, &0_i128);
+
+    let events_after_1 =
+        find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED);
+    assert_eq!(
+        events_after_1.len(),
+        1,
+        "Exactly one ProtocolChangedEvent after none→blend"
+    );
+
+    let (_, _, data) = &events_after_1[0];
+    let e1 = ProtocolChangedEvent::try_from_val(&env, data)
+        .expect("Should be ProtocolChangedEvent");
+    assert_eq!(e1.old_protocol, symbol_short!("none"));
+    assert_eq!(e1.new_protocol, symbol_short!("blend"));
+
+    // Transition 2: blend → none
+    client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
+
+    let events_after_2 =
+        find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED);
+    assert_eq!(
+        events_after_2.len(),
+        2,
+        "Two ProtocolChangedEvents after blend→none"
+    );
+
+    let (_, _, data) = &events_after_2[1];
+    let e2 = ProtocolChangedEvent::try_from_val(&env, data)
+        .expect("Should be ProtocolChangedEvent");
+    assert_eq!(e2.old_protocol, symbol_short!("blend"));
+    assert_eq!(e2.new_protocol, symbol_short!("none"));
+
+    // Idempotent rebalance (none → none): must NOT emit another event
+    client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
+
+    let events_after_3 =
+        find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED);
+    assert_eq!(
+        events_after_3.len(),
+        2,
+        "No new ProtocolChangedEvent when protocol stays the same"
+    );
+}
+
+/// ProtocolChangedEvent is emitted when `supply_to_blend` sets the protocol
+/// (not just when `set_current_protocol` is called from `rebalance` top-level).
+#[test]
+fn test_protocol_changed_event_emitted_from_supply_path() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let user = Address::generate(&env);
+    mint_and_deposit(&env, &client, &usdc_token, &user, 5_000_000_i128);
+
+    // This triggers supply_to_blend which calls set_current_protocol("blend")
+    client.rebalance(&symbol_short!("blend"), &500_i128, &0_i128);
+
+    let proto_events =
+        find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED);
+    assert_eq!(
+        proto_events.len(),
+        1,
+        "ProtocolChangedEvent must be emitted via supply_to_blend path"
+    );
+
+    let (_, _, data) = &proto_events[0];
+    let evt = ProtocolChangedEvent::try_from_val(&env, data)
+        .expect("Should be ProtocolChangedEvent");
+    assert_eq!(evt.old_protocol, symbol_short!("none"));
+    assert_eq!(evt.new_protocol, symbol_short!("blend"));
+}
+
+/// ProtocolChangedEvent carries the correct old_protocol when transitioning
+/// from blend → none via a user's `withdraw_all` (which drains Blend fully).
+#[test]
+fn test_protocol_changed_event_on_user_withdraw_draining_blend() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let deposit_amount = 8_000_000_i128;
+    let user = Address::generate(&env);
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
+
+    // Supply to Blend — emits one ProtocolChangedEvent (none→blend)
+    client.rebalance(&symbol_short!("blend"), &600_i128, &0_i128);
+
+    let events_before_wd =
+        find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED);
+    assert_eq!(events_before_wd.len(), 1);
+
+    // User drains the vault — Blend balance hits 0, set_current_protocol("none") fires
+    client.withdraw_all(&user);
+
+    let events_after_wd =
+        find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED);
+    assert_eq!(
+        events_after_wd.len(),
+        2,
+        "Second ProtocolChangedEvent must fire when withdraw_all empties Blend"
+    );
+
+    let (_, _, data) = &events_after_wd[1];
+    let evt = ProtocolChangedEvent::try_from_val(&env, data)
+        .expect("Should be ProtocolChangedEvent");
+    assert_eq!(evt.old_protocol, symbol_short!("blend"));
+    assert_eq!(evt.new_protocol, symbol_short!("none"));
+}
+
+// ============================================================================
+// #291 — CANONICAL DEPOSIT → REBALANCE → YIELD → WITHDRAW LIFECYCLE TEST
+// ============================================================================
+
+/// Single canonical test covering the full vault lifecycle with assertions on:
+///  - Share minting and pricing at each stage
+///  - Asset accounting (total_assets, total_shares)
+///  - Protocol transitions and ProtocolChangedEvent
+///  - Yield accrual reflected in withdrawal amounts
+///  - Final invariant: all shares burned, all assets returned
+///
+/// Closes issue #291.
+#[test]
+fn test_full_lifecycle_deposit_rebalance_yield_withdraw() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+    let blend_client = MockBlendPoolClient::new(&env, &blend_pool);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    // ── PHASE 1: DEPOSIT ──────────────────────────────────────────────────────
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+    let deposit_a = 10_000_000_i128; // 10 USDC
+    let deposit_b = 10_000_000_i128; // 10 USDC
+    let total_deposited = deposit_a + deposit_b;
+
+    mint_and_deposit(&env, &client, &usdc_token, &user_a, deposit_a);
+    mint_and_deposit(&env, &client, &usdc_token, &user_b, deposit_b);
+
+    // 1:1 share price on bootstrap
+    assert_eq!(client.get_total_assets(), total_deposited);
+    assert_eq!(client.get_total_shares(), total_deposited);
+    assert_eq!(client.get_shares(&user_a), deposit_a);
+    assert_eq!(client.get_shares(&user_b), deposit_b);
+    assert_eq!(
+        vault_usdc_balance(&env, &usdc_token, &contract_id),
+        total_deposited
+    );
+
+    // ── PHASE 2: REBALANCE → BLEND ────────────────────────────────────────────
+    client.rebalance(&symbol_short!("blend"), &750_i128, &0_i128);
+
+    assert_eq!(client.get_current_protocol(), symbol_short!("blend"));
+    assert_eq!(
+        blend_client.supplied(&usdc_token),
+        total_deposited,
+        "All funds must be in Blend"
+    );
+    assert_eq!(
+        vault_usdc_balance(&env, &usdc_token, &contract_id),
+        0,
+        "Vault idle balance must be zero after rebalance to Blend"
+    );
+    // Total assets unchanged by rebalance
+    assert_eq!(client.get_total_assets(), total_deposited);
+    assert_eq!(client.get_total_shares(), total_deposited);
+
+    // ProtocolChangedEvent: none → blend
+    let proto_events =
+        find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED);
+    assert_eq!(proto_events.len(), 1, "One ProtocolChangedEvent after rebalance to blend");
+    let (_, _, data) = &proto_events[0];
+    let pce = ProtocolChangedEvent::try_from_val(&env, data).unwrap();
+    assert_eq!(pce.old_protocol, symbol_short!("none"));
+    assert_eq!(pce.new_protocol, symbol_short!("blend"));
+
+    // BlendSupplyEvent
+    let supply_events = collect_blend_supply_events(&env);
+    assert_eq!(supply_events.len(), 1);
+    assert_eq!(supply_events[0].amount_actual, total_deposited);
+    assert!(supply_events[0].success);
+
+    // ── PHASE 3: YIELD ACCRUAL ────────────────────────────────────────────────
+    // 10% yield: 2 USDC minted to vault (simulating interest from Blend)
+    let yield_amount = 2_000_000_i128;
+    let total_with_yield = total_deposited + yield_amount;
+
+    token_client.mint(&contract_id, &yield_amount);
+    client.update_total_assets(&agent, &total_with_yield, &false, &0);
+
+    // total_assets grows; total_shares unchanged → price per share = 1.1
+    assert_eq!(client.get_total_assets(), total_with_yield);
+    assert_eq!(client.get_total_shares(), total_deposited); // shares unchanged
+
+    // Each user's share value: 10_000_000 shares × (22/20) = 11 USDC
+    let share_price_numerator = total_with_yield;  // 22_000_000
+    let share_price_denominator = total_deposited; // 20_000_000
+    let user_a_entitlement =
+        deposit_a * share_price_numerator / share_price_denominator; // 11_000_000
+    assert_eq!(user_a_entitlement, 11_000_000_i128);
+
+    // ── PHASE 4: USER A WITHDRAWS (from Blend) ───────────────────────────────
+    client.withdraw(&user_a, &user_a_entitlement);
+
+    // User A received yield-bearing amount
+    assert_eq!(
+        token_client.balance(&user_a),
+        user_a_entitlement,
+        "User A must receive principal + yield share"
+    );
+    // User A's shares are fully burned
+    assert_eq!(client.get_shares(&user_a), 0);
+
+    // Vault state after user A's withdrawal
+    let remaining_shares = deposit_b; // 10_000_000
+    let remaining_assets = total_with_yield - user_a_entitlement; // 11_000_000
+    assert_eq!(client.get_total_shares(), remaining_shares);
+    assert_eq!(client.get_total_assets(), remaining_assets);
+
+    // Blend withdrawal event fired
+    let wd_events = collect_blend_withdraw_events(&env);
+    assert!(!wd_events.is_empty(), "BlendWithdrawEvent must fire on user withdrawal from Blend");
+
+    // ── PHASE 5: REBALANCE → NONE ─────────────────────────────────────────────
+    client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
+
+    assert_eq!(client.get_current_protocol(), symbol_short!("none"));
+    assert_eq!(blend_client.supplied(&usdc_token), 0, "Blend fully emptied");
+    assert_eq!(
+        vault_usdc_balance(&env, &usdc_token, &contract_id),
+        remaining_assets,
+        "All remaining funds returned to vault"
+    );
+
+    // ProtocolChangedEvent: blend → none
+    let proto_events_2 =
+        find_events_by_topic(env.events().all(), &env, TOPIC_PROTOCOL_CHANGED);
+    assert_eq!(
+        proto_events_2.len(),
+        2,
+        "Second ProtocolChangedEvent after rebalance to none"
+    );
+    let (_, _, data2) = &proto_events_2[1];
+    let pce2 = ProtocolChangedEvent::try_from_val(&env, data2).unwrap();
+    assert_eq!(pce2.old_protocol, symbol_short!("blend"));
+    assert_eq!(pce2.new_protocol, symbol_short!("none"));
+
+    // ── PHASE 6: USER B WITHDRAWS (from idle vault) ───────────────────────────
+    client.withdraw(&user_b, &remaining_assets);
+
+    assert_eq!(
+        token_client.balance(&user_b),
+        remaining_assets,
+        "User B must receive their full yield-bearing entitlement"
+    );
+    assert_eq!(client.get_shares(&user_b), 0);
+
+    // ── FINAL INVARIANTS ──────────────────────────────────────────────────────
+    assert_eq!(client.get_total_shares(), 0, "All shares must be burned");
+    assert_eq!(client.get_total_assets(), 0, "All assets must be returned");
+    assert_eq!(client.get_total_deposits(), 0, "Deposits tracker must be zero");
+    assert_eq!(
+        vault_usdc_balance(&env, &usdc_token, &contract_id),
+        0,
+        "Vault idle balance must be zero at end"
+    );
+
+    // Total paid out = both users received principal + proportional yield
+    let total_paid = token_client.balance(&user_a) + token_client.balance(&user_b);
+    assert_eq!(
+        total_paid,
+        total_with_yield,
+        "Sum of all withdrawals must equal total_deposited + yield"
+    );
 }

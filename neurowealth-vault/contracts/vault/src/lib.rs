@@ -152,7 +152,7 @@ pub enum VaultError {
     /// Burned shares must be positive.
     SharesToBurnMustBePositive = 10,
     /// User has insufficient shares for the requested amount.
-    InsufficientSharesForRequestedAmount = 11,
+    InsufficientSharesForAmount = 11,
     /// User has no shares to withdraw.
     NoSharesToWithdraw = 12,
     /// Vault has no liquidity available.
@@ -185,8 +185,8 @@ pub enum VaultError {
     MinimumDepositTooLow = 26,
     /// Maximum deposit is below the minimum.
     MaximumDepositBelowMinimum = 27,
-    /// Caller is not allowed to set Blend pool.
-    OnlyOwnerCanSetBlendPool = 28,
+    /// Caller is not allowed to configure a protocol pool.
+    OnlyOwnerCanConfigurePool = 28,
     /// Caller is not the pending owner.
     CallerIsNotPendingOwner = 29,
     /// Caller is not allowed to update total assets.
@@ -196,7 +196,7 @@ pub enum VaultError {
     /// Total assets decrease exceeds configured maximum bps.
     DecreaseExceedsMaximumAllowedBps = 32,
     /// Vault balance is insufficient for reported assets.
-    InsufficientBalanceForReportedAssets = 33,
+    InsufficientBalanceForAssets = 33,
     /// Caller is not the owner.
     CallerIsNotOwner = 34,
     /// Vault is paused.
@@ -223,16 +223,14 @@ pub enum VaultError {
     ApprovalTtlTooHigh = 45,
     /// DEX liquidity pool is not configured.
     DexPoolNotConfigured = 46,
-    /// Caller is not allowed to set the DEX pool.
-    OnlyOwnerCanSetDexPool = 47,
     /// Strategy must be one of "conservative", "balanced", or "growth".
-    InvalidStrategy = 48,
+    InvalidStrategy = 47,
     /// An agent update proposal is already pending.
-    AgentUpdateAlreadyPending = 49,
+    AgentUpdateAlreadyPending = 48,
     /// No pending agent update exists to confirm or cancel.
-    NoAgentUpdatePending = 50,
+    NoAgentUpdatePending = 49,
     /// The agent timelock delay has not yet elapsed.
-    AgentTimelockNotExpired = 51,
+    AgentTimelockNotExpired = 50,
 }
 
 // ============================================================================
@@ -1460,7 +1458,7 @@ impl NeuroWealthVault {
         Self::require(
             &env,
             user_shares >= shares_to_burn,
-            VaultError::InsufficientSharesForRequestedAmount,
+            VaultError::InsufficientSharesForAmount,
         );
 
         // Calculate actual assets to return based on burned shares.
@@ -2842,7 +2840,7 @@ impl NeuroWealthVault {
         Self::require(
             &env,
             owner == stored_owner,
-            VaultError::OnlyOwnerCanSetBlendPool,
+            VaultError::OnlyOwnerCanConfigurePool,
         );
 
         // Validate pool interface by probing the `balance` function (Issue #148).
@@ -2904,7 +2902,7 @@ impl NeuroWealthVault {
         Self::require(
             &env,
             owner == stored_owner,
-            VaultError::OnlyOwnerCanSetDexPool,
+            VaultError::OnlyOwnerCanConfigurePool,
         );
 
         // Validate the pool interface by probing the `balance` function. If the
@@ -3268,7 +3266,7 @@ impl NeuroWealthVault {
         Self::require(
             &env,
             total_available >= new_total,
-            VaultError::InsufficientBalanceForReportedAssets,
+            VaultError::InsufficientBalanceForAssets,
         );
 
         env.storage()
