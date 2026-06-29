@@ -1,9 +1,18 @@
-//! Regression tests for issue #183 – TVL cap uses TotalAssets (not TotalDeposits).
+//! Regression tests for issues #183 and #299 – TVL cap uses TotalAssets (not TotalDeposits).
 //!
-//! TotalDeposits tracks principal only; TotalAssets includes yield.
-//! After yield accrual via update_total_assets(), TotalAssets > TotalDeposits.
-//! The TVL cap must compare against TotalAssets to prevent the vault from
-//! accepting deposits that would push total managed value past the cap.
+//! ## TotalDeposits vs TotalAssets (issue #299)
+//!
+//! `TotalDeposits` tracks principal only; `TotalAssets` includes yield.
+//! After `update_total_assets()`, `TotalAssets >= TotalDeposits`.
+//!
+//! Design decision (issue #299): `TotalDeposits` is intentionally *not* synced on
+//! yield updates.  It is a principal-only counter for reporting.  All cap guards
+//! and share-pricing use `TotalAssets` so that yield is correctly accounted for.
+//!
+//! The TVL cap compares against `TotalAssets` to prevent the vault from accepting
+//! deposits that would push total managed value (principal + yield) past the cap.
+//! Checking `TotalDeposits` instead would allow over-subscription once yield grows
+//! the vault past the cap.
 
 use super::utils::*;
 use soroban_sdk::{testutils::Address as _, Address, Env};

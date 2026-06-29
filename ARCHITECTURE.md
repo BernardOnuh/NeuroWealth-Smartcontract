@@ -432,14 +432,19 @@ as reported by the agent via `update_total_assets()`.  The live balance getters
 query on-chain token balances directly and therefore represent the current
 on-chain state before any yield reporting adjustment.
 
-## TotalDeposits vs TotalAssets Relationship (Issue #183)
+## TotalDeposits vs TotalAssets Relationship (Issues #183, #299)
 
 Two separate values track vault accounting:
 
 | Field | Updated by | Includes yield? | Used for |
 |---|---|---|---|
-| `TotalDeposits` | `deposit`, `withdraw` | No | Principal bookkeeping, reporting |
-| `TotalAssets` | `deposit`, `withdraw`, `update_total_assets` | Yes | Share pricing, TVL cap guard |
+| `TotalDeposits` | `deposit`, `withdraw` | No | Principal bookkeeping, reporting only |
+| `TotalAssets` | `deposit`, `withdraw`, `update_total_assets` | Yes | Share pricing, TVL cap guard, all economic math |
+
+**Design decision (issue #299):** `TotalDeposits` is intentionally *not* synced
+when `update_total_assets()` is called.  It is a principal-only counter.
+`TotalAssets` is the authoritative value for all economic calculations and cap
+enforcement.
 
 **TVL cap check uses `TotalAssets`**: after yield accrual `TotalAssets` can
 exceed `TotalDeposits`.  The cap must compare against `TotalAssets` to prevent
@@ -447,9 +452,13 @@ additional deposits from pushing total managed value past the intended limit.
 Checking `TotalDeposits` instead would allow over-subscription once yield has
 grown the vault past the cap.
 
-Share price formula: `share_price = TotalAssets / TotalShares`.  All economic
+**Share pricing**: `share_price = TotalAssets / TotalShares`.  All economic
 quantities (user balance, redemption amount) derive from `TotalAssets`, not
 `TotalDeposits`.
+
+**Regression tests**: `tests/test_total_assets_cap.rs` covers the full lifecycle:
+deposit → yield accrual → withdrawal → cap check, confirming that `TotalAssets`
+diverges from `TotalDeposits` after yield and that cap guards remain correct.
 
 ## expected_apy Validation (Issue #185)
 
