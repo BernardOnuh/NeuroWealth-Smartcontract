@@ -15,11 +15,12 @@
 use super::utils::*;
 use crate::{
     AgentUpdatedEvent, AssetsUpdatedEvent, CapsUpdatedEvent, DepositEvent,
-    DepositLimitsUpdatedEvent, EmergencyPausedEvent, OwnershipTransferCancelledEvent,
-    OwnershipTransferInitiatedEvent, OwnershipTransferredEvent, RebalanceEvent,
-    TvlCapUpdatedEvent, UserDepositCapUpdatedEvent, VaultInitializedEvent, VaultPausedEvent,
-    VaultUnpausedEvent, WithdrawEvent, TOPIC_AGENT_UPDATED, TOPIC_ASSETS_UPDATED,
-    TOPIC_CAPS_UPDATED, TOPIC_DEPOSIT, TOPIC_DEPOSIT_LIMITS_UPDATED, TOPIC_EMERGENCY_PAUSED,
+    DepositLimitsUpdatedEvent, DexPoolConfiguredEvent, DexSupplyEvent, DexWithdrawEvent,
+    EmergencyPausedEvent, OwnershipTransferCancelledEvent, OwnershipTransferInitiatedEvent,
+    OwnershipTransferredEvent, RebalanceEvent, TvlCapUpdatedEvent, UserDepositCapUpdatedEvent,
+    VaultInitializedEvent, VaultPausedEvent, VaultUnpausedEvent, WithdrawEvent, TOPIC_AGENT_UPDATED,
+    TOPIC_ASSETS_UPDATED, TOPIC_CAPS_UPDATED, TOPIC_DEPOSIT, TOPIC_DEPOSIT_LIMITS_UPDATED,
+    TOPIC_DEX_POOL_CONFIGURED, TOPIC_DEX_SUPPLY, TOPIC_DEX_WITHDRAW, TOPIC_EMERGENCY_PAUSED,
     TOPIC_INIT, TOPIC_OWNERSHIP_CANCELLED, TOPIC_OWNERSHIP_INITIATED, TOPIC_OWNERSHIP_TRANSFERRED,
     TOPIC_PAUSED, TOPIC_REBALANCE, TOPIC_TVL_CAP_UPDATED, TOPIC_UNPAUSED, TOPIC_USER_CAP_UPDATED,
     TOPIC_WITHDRAW,
@@ -551,6 +552,96 @@ fn snapshot_ownership_transfer_cancelled_event_all_fields() {
 
     snap!(event, owner, owner, "OwnershipTransferCancelledEvent");
     snap!(event, cancelled_pending, pending_owner, "OwnershipTransferCancelledEvent");
+}
+
+// ── DexSupplyEvent (#340) ─────────────────────────────────────────────────────
+
+#[test]
+fn snapshot_dex_supply_event_all_fields() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, dex_pool) = setup_vault_with_token_and_dex(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_dex_pool(&owner, &dex_pool);
+
+    let user = Address::generate(&env);
+    let deposit_amount = 15_000_000_i128;
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
+
+    // Supply to the DEX: emits DexSupplyEvent with the full amount.
+    client.rebalance(&symbol_short!("dex"), &950_i128, &0_i128);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_DEX_SUPPLY);
+    assert_eq!(events.len(), 1, "exactly one DexSupplyEvent expected");
+
+    let (_, _, data) = &events[0];
+    let event = DexSupplyEvent::try_from_val(&env, data)
+        .expect("DexSupplyEvent: try_from_val failed — schema may have drifted");
+
+    snap!(event, asset, usdc_token, "DexSupplyEvent");
+    snap!(event, amount_actual, deposit_amount, "DexSupplyEvent");
+    snap!(event, success, true, "DexSupplyEvent");
+}
+
+// ── DexWithdrawEvent (#340) ───────────────────────────────────────────────────
+
+#[test]
+fn snapshot_dex_withdraw_event_all_fields() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, dex_pool) = setup_vault_with_token_and_dex(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_dex_pool(&owner, &dex_pool);
+
+    let user = Address::generate(&env);
+    let deposit_amount = 20_000_000_i128;
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
+
+    // Supply to the DEX, then exit by rebalancing to "none": emits DexWithdrawEvent.
+    client.rebalance(&symbol_short!("dex"), &1100_i128, &0_i128);
+    client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_DEX_WITHDRAW);
+    assert_eq!(events.len(), 1, "exactly one DexWithdrawEvent expected");
+
+    let (_, _, data) = &events[0];
+    let event = DexWithdrawEvent::try_from_val(&env, data)
+        .expect("DexWithdrawEvent: try_from_val failed — schema may have drifted");
+
+    snap!(event, asset, usdc_token, "DexWithdrawEvent");
+    snap!(event, amount_actual, deposit_amount, "DexWithdrawEvent");
+    snap!(event, success, true, "DexWithdrawEvent");
+}
+
+// ── DexPoolConfiguredEvent (#340) ─────────────────────────────────────────────
+
+#[test]
+fn snapshot_dex_pool_configured_event_all_fields() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, _usdc_token, dex_pool) =
+        setup_vault_with_token_and_dex(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_dex_pool(&owner, &dex_pool);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_DEX_POOL_CONFIGURED);
+    assert_eq!(events.len(), 1, "exactly one DexPoolConfiguredEvent expected");
+
+    let (_, _, data) = &events[0];
+    let event = DexPoolConfiguredEvent::try_from_val(&env, data)
+        .expect("DexPoolConfiguredEvent: try_from_val failed — schema may have drifted");
+
+    // First configuration: no previous pool.
+    let expected_old_pool: Option<Address> = None;
+    snap!(event, old_pool, expected_old_pool, "DexPoolConfiguredEvent");
+    snap!(event, new_pool, dex_pool, "DexPoolConfiguredEvent");
+    snap!(event, owner, owner, "DexPoolConfiguredEvent");
 }
 
 // ── Ordering regression ───────────────────────────────────────────────────────
