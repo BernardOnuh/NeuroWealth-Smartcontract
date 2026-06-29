@@ -226,12 +226,17 @@ pub enum VaultError {
     DexPoolNotConfigured = 46,
     /// Strategy must be one of "conservative", "balanced", or "growth".
     InvalidStrategy = 47,
-    /// An agent update proposal is already pending.
-    AgentUpdateAlreadyPending = 48,
-    /// No pending agent update exists to confirm or cancel.
-    NoAgentUpdatePending = 49,
-    /// The agent timelock delay has not yet elapsed.
-    AgentTimelockNotExpired = 50,
+    /// A timelocked proposal (agent update or upgrade) is already pending.
+    ///
+    /// Shared by the agent timelock (#317) and the upgrade timelock (#316).
+    /// The SDK caps `#[contracterror]` enums at 50 cases, so both two-step flows
+    /// reuse one set of generic timelock error codes rather than each defining
+    /// their own.
+    TimelockAlreadyPending = 48,
+    /// No timelocked proposal exists to confirm/execute or cancel.
+    NoTimelockPending = 49,
+    /// The timelock delay has not yet elapsed.
+    TimelockNotExpired = 50,
 }
 
 // ============================================================================
@@ -325,6 +330,10 @@ pub enum DataKey {
     PendingAgent,
     /// Ledger sequence at which the pending agent update becomes effective (#317).
     AgentTimelockExpiry,
+    /// Pending contract WASM hash awaiting timelock execution (#316).
+    PendingUpgradeHash,
+    /// Ledger sequence at which the pending upgrade becomes executable (#316).
+    UpgradeTimelockExpiry,
 }
 
 // ============================================================================
@@ -646,6 +655,30 @@ pub struct UpgradedEvent {
     pub new_version: u32,
 }
 
+/// Emitted when an upgrade is scheduled via `schedule_upgrade()` (timelock step 1). (#316)
+///
+/// # Topics
+/// - `SymbolShort("upg_sched")` - Event identifier
+#[allow(missing_docs)]
+#[contracttype]
+pub struct UpgradeScheduledEvent {
+    /// Hash of the WASM binary that will be activated once the timelock elapses.
+    pub new_wasm_hash: BytesN<32>,
+    /// Ledger at which `execute_upgrade()` becomes callable.
+    pub effective_ledger: u32,
+}
+
+/// Emitted when a pending upgrade is cancelled via `cancel_upgrade()`. (#316)
+///
+/// # Topics
+/// - `SymbolShort("upg_cncl")` - Event identifier
+#[allow(missing_docs)]
+#[contracttype]
+pub struct UpgradeCancelledEvent {
+    /// Hash of the WASM binary whose pending upgrade was cancelled.
+    pub cancelled_wasm_hash: BytesN<32>,
+}
+
 /// Emitted when assets are supplied to Blend protocol.
 ///
 /// # Topics
@@ -822,6 +855,12 @@ const MAX_APPROVAL_TTL: u32 = 500_000;
 /// 17,280 ledgers × ~5 s per ledger ≈ 86,400 s = 24 h.
 const AGENT_TIMELOCK_LEDGERS: u32 = 17_280;
 
+/// Number of ledgers an upgrade must wait between `schedule_upgrade` and
+/// `execute_upgrade` (#316). Same 24-hour window as the agent timelock, giving
+/// users and operators a recovery window to react to a malicious or mistaken
+/// upgrade proposal (and to `cancel_upgrade`) before new WASM takes effect.
+const UPGRADE_TIMELOCK_LEDGERS: u32 = 17_280;
+
 /// Minimum ledgers remaining before `touch_user_ttl` extends a user's `Shares` entry.
 const USER_SHARES_TTL_THRESHOLD: u32 = 100;
 /// Target ledgers to extend a user's `Shares` entry to when maintaining TTL.
@@ -839,8 +878,9 @@ use topics::{
     TOPIC_DEX_POOL_CONFIGURED, TOPIC_DEX_SUPPLY, TOPIC_DEX_WITHDRAW, TOPIC_EMERGENCY_PAUSED,
     TOPIC_INIT, TOPIC_LIMITS_UPDATED, TOPIC_OWNERSHIP_CANCELLED, TOPIC_OWNERSHIP_INITIATED,
     TOPIC_OWNERSHIP_TRANSFERRED, TOPIC_PAUSED, TOPIC_PROTOCOL_CHANGED, TOPIC_REBALANCE,
-    TOPIC_REBALANCE_FAILED, TOPIC_TVL_CAP_UPDATED, TOPIC_UNPAUSED, TOPIC_UPGRADED,
-    TOPIC_USER_CAP_UPDATED, TOPIC_USER_STRATEGY_UPDATED, TOPIC_WITHDRAW,
+    TOPIC_REBALANCE_FAILED, TOPIC_TVL_CAP_UPDATED, TOPIC_UNPAUSED, TOPIC_UPGRADE_CANCELLED,
+    TOPIC_UPGRADE_SCHEDULED, TOPIC_UPGRADED, TOPIC_USER_CAP_UPDATED, TOPIC_USER_STRATEGY_UPDATED,
+    TOPIC_WITHDRAW,
 };
 
 impl BlendPoolClient {
@@ -2648,7 +2688,7 @@ impl NeuroWealthVault {
     /// # Panics
     ///
     /// - If the caller is not the owner.
-    /// - If a pending agent update already exists (`AgentUpdateAlreadyPending`).
+    /// - If a pending agent update already exists (`TimelockAlreadyPending`).
     pub fn update_agent(env: Env, new_agent: Address) {
         Self::require_initialized(&env);
         Self::require_is_owner(&env);
@@ -2656,7 +2696,7 @@ impl NeuroWealthVault {
         Self::require(
             &env,
             !env.storage().instance().has(&DataKey::PendingAgent),
-            VaultError::AgentUpdateAlreadyPending,
+            VaultError::TimelockAlreadyPending,
         );
 
         let old_agent: Address = env.storage().instance().get(&DataKey::Agent).unwrap();
@@ -2696,8 +2736,8 @@ impl NeuroWealthVault {
     /// # Panics
     ///
     /// - If the caller is not the owner.
-    /// - If no pending proposal exists (`NoAgentUpdatePending`).
-    /// - If the timelock delay has not yet elapsed (`AgentTimelockNotExpired`).
+    /// - If no pending proposal exists (`NoTimelockPending`).
+    /// - If the timelock delay has not yet elapsed (`TimelockNotExpired`).
     pub fn confirm_agent_update(env: Env) {
         Self::require_initialized(&env);
         Self::require_is_owner(&env);
@@ -2705,7 +2745,7 @@ impl NeuroWealthVault {
         Self::require(
             &env,
             env.storage().instance().has(&DataKey::PendingAgent),
-            VaultError::NoAgentUpdatePending,
+            VaultError::NoTimelockPending,
         );
 
         let expiry: u32 = env
@@ -2717,7 +2757,7 @@ impl NeuroWealthVault {
         Self::require(
             &env,
             env.ledger().sequence() >= expiry,
-            VaultError::AgentTimelockNotExpired,
+            VaultError::TimelockNotExpired,
         );
 
         let old_agent: Address = env.storage().instance().get(&DataKey::Agent).unwrap();
@@ -2762,7 +2802,7 @@ impl NeuroWealthVault {
     /// # Panics
     ///
     /// - If the caller is not the owner.
-    /// - If no pending proposal exists (`NoAgentUpdatePending`).
+    /// - If no pending proposal exists (`NoTimelockPending`).
     pub fn cancel_agent_update(env: Env) {
         Self::require_initialized(&env);
         Self::require_is_owner(&env);
@@ -2770,7 +2810,7 @@ impl NeuroWealthVault {
         Self::require(
             &env,
             env.storage().instance().has(&DataKey::PendingAgent),
-            VaultError::NoAgentUpdatePending,
+            VaultError::NoTimelockPending,
         );
 
         let old_agent: Address = env.storage().instance().get(&DataKey::Agent).unwrap();
@@ -3287,12 +3327,15 @@ impl NeuroWealthVault {
     // ADMINISTRATIVE - UPGRADES
     // ==========================================================================
 
-    /// Upgrades the contract to a new WASM implementation.
+    /// Schedules a contract upgrade behind a timelock (step 1 of 2). (#316)
     ///
-    /// The owner must authorize this call. The new WASM hash must correspond
-    /// to a binary previously uploaded to the network via
-    /// `stellar contract install`. All storage state (user balances,
-    /// configuration, owner, agent) is preserved across upgrades.
+    /// Records `new_wasm_hash` as the pending upgrade and sets an expiry ledger
+    /// after which `execute_upgrade()` may be called. The delay
+    /// (`UPGRADE_TIMELOCK_LEDGERS`, ≈24 h) gives users and operators a recovery
+    /// window to observe the proposal on-chain and react — including calling
+    /// `cancel_upgrade()` — before new WASM takes effect. This closes the
+    /// "compromised owner key swaps WASM instantly" gap. Only one pending
+    /// upgrade is allowed at a time.
     ///
     /// # Arguments
     ///
@@ -3300,25 +3343,17 @@ impl NeuroWealthVault {
     /// * `owner` - The owner address (must authorize).
     /// * `new_wasm_hash` - Hash of the new WASM binary (32 bytes).
     ///
-    /// # Returns
-    ///
-    /// None.
-    ///
     /// # Events
     ///
     /// Emits:
-    /// - `UpgradedEvent`
-    ///
-    /// # Errors
-    ///
-    /// None.
+    /// - `UpgradeScheduledEvent`
     ///
     /// # Panics
     ///
     /// - If the vault is paused.
     /// - If the caller is not the stored owner.
-    /// - If `new_wasm_hash` does not correspond to an uploaded WASM binary.
-    pub fn upgrade(env: Env, owner: Address, new_wasm_hash: BytesN<32>) {
+    /// - If an upgrade is already pending (`TimelockAlreadyPending`).
+    pub fn schedule_upgrade(env: Env, owner: Address, new_wasm_hash: BytesN<32>) {
         Self::require_initialized(&env);
         owner.require_auth();
         Self::require_not_paused(&env);
@@ -3326,13 +3361,102 @@ impl NeuroWealthVault {
         let stored_owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
         Self::require(&env, owner == stored_owner, VaultError::CallerIsNotOwner);
 
+        Self::require(
+            &env,
+            !env.storage().instance().has(&DataKey::PendingUpgradeHash),
+            VaultError::TimelockAlreadyPending,
+        );
+
+        let effective_ledger = env
+            .ledger()
+            .sequence()
+            .saturating_add(UPGRADE_TIMELOCK_LEDGERS);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingUpgradeHash, &new_wasm_hash);
+        env.storage()
+            .instance()
+            .set(&DataKey::UpgradeTimelockExpiry, &effective_ledger);
+
+        env.events().publish(
+            (TOPIC_UPGRADE_SCHEDULED,),
+            UpgradeScheduledEvent {
+                new_wasm_hash,
+                effective_ledger,
+            },
+        );
+    }
+
+    /// Executes a scheduled upgrade after the timelock has elapsed (step 2 of 2). (#316)
+    ///
+    /// Can only be called once `env.ledger().sequence() >= UpgradeTimelockExpiry`.
+    /// On success the pending WASM hash is activated, the contract `Version` is
+    /// incremented, and the pending proposal is cleared. All storage state (user
+    /// balances, configuration, owner, agent) is preserved across the upgrade.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    /// * `owner` - The owner address (must authorize).
+    ///
+    /// # Events
+    ///
+    /// Emits:
+    /// - `UpgradedEvent`
+    ///
+    /// # Panics
+    ///
+    /// - If the vault is paused.
+    /// - If the caller is not the stored owner.
+    /// - If no pending upgrade exists (`NoTimelockPending`).
+    /// - If the timelock delay has not yet elapsed (`TimelockNotExpired`).
+    /// - If the pending hash does not correspond to an uploaded WASM binary.
+    pub fn execute_upgrade(env: Env, owner: Address) {
+        Self::require_initialized(&env);
+        owner.require_auth();
+        Self::require_not_paused(&env);
+
+        let stored_owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
+        Self::require(&env, owner == stored_owner, VaultError::CallerIsNotOwner);
+
+        Self::require(
+            &env,
+            env.storage().instance().has(&DataKey::PendingUpgradeHash),
+            VaultError::NoTimelockPending,
+        );
+
+        let expiry: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::UpgradeTimelockExpiry)
+            .unwrap_or(0);
+
+        Self::require(
+            &env,
+            env.ledger().sequence() >= expiry,
+            VaultError::TimelockNotExpired,
+        );
+
+        let new_wasm_hash: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingUpgradeHash)
+            .unwrap();
+
+        // Clear the pending proposal before applying the upgrade so a fresh
+        // proposal can be scheduled afterwards.
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingUpgradeHash);
+        env.storage()
+            .instance()
+            .remove(&DataKey::UpgradeTimelockExpiry);
+
         // Soroban will trap/panic here if the hash is not installed on the network.
-        // We perform the upgrade first to ensure a bad hash does not leave us with
-        // an incremented version but failed upgrade.
         env.deployer().update_current_contract_wasm(new_wasm_hash);
 
         let old_version: u32 = env.storage().instance().get(&DataKey::Version).unwrap_or(1);
-
         let new_version = old_version.checked_add(1).expect("vault: version overflow");
         env.storage()
             .instance()
@@ -3345,6 +3469,76 @@ impl NeuroWealthVault {
                 new_version,
             },
         );
+    }
+
+    /// Cancels a pending upgrade before it can be executed. (#316)
+    ///
+    /// Only the owner may cancel. Clears the pending proposal so a new one can
+    /// be scheduled. Safe to call at any point during the timelock window — this
+    /// is the recovery path if a malicious or mistaken upgrade was scheduled.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    /// * `owner` - The owner address (must authorize).
+    ///
+    /// # Events
+    ///
+    /// Emits:
+    /// - `UpgradeCancelledEvent`
+    ///
+    /// # Panics
+    ///
+    /// - If the caller is not the stored owner.
+    /// - If no pending upgrade exists (`NoTimelockPending`).
+    pub fn cancel_upgrade(env: Env, owner: Address) {
+        Self::require_initialized(&env);
+        owner.require_auth();
+
+        let stored_owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
+        Self::require(&env, owner == stored_owner, VaultError::CallerIsNotOwner);
+
+        Self::require(
+            &env,
+            env.storage().instance().has(&DataKey::PendingUpgradeHash),
+            VaultError::NoTimelockPending,
+        );
+
+        let cancelled_wasm_hash: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingUpgradeHash)
+            .unwrap();
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingUpgradeHash);
+        env.storage()
+            .instance()
+            .remove(&DataKey::UpgradeTimelockExpiry);
+
+        env.events().publish(
+            (TOPIC_UPGRADE_CANCELLED,),
+            UpgradeCancelledEvent {
+                cancelled_wasm_hash,
+            },
+        );
+    }
+
+    /// Returns the pending upgrade WASM hash and effective ledger, if a proposal
+    /// is active. (#316)
+    pub fn get_pending_upgrade(env: Env) -> Option<(BytesN<32>, u32)> {
+        Self::require_initialized(&env);
+        let pending: Option<BytesN<32>> =
+            env.storage().instance().get(&DataKey::PendingUpgradeHash);
+        pending.map(|hash| {
+            let expiry: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::UpgradeTimelockExpiry)
+                .unwrap_or(0);
+            (hash, expiry)
+        })
     }
 
     // ==========================================================================

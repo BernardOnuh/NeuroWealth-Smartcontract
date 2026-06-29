@@ -423,6 +423,34 @@ pub struct UpgradedEvent {
 }
 ```
 
+Emitted by `execute_upgrade` once the upgrade timelock has elapsed (Issue #316).
+
+### 16a. UpgradeScheduledEvent
+**Topic:** `"upg_sched"`
+
+Emitted when an upgrade is scheduled via `schedule_upgrade` — step 1 of the
+two-step timelocked upgrade (Issue #316). The new WASM hash does not take effect
+until `execute_upgrade` is called at or after `effective_ledger`.
+
+```rust
+pub struct UpgradeScheduledEvent {
+    pub new_wasm_hash: BytesN<32>, // Hash of the WASM to activate after the timelock
+    pub effective_ledger: u32,     // Ledger at which execute_upgrade becomes callable
+}
+```
+
+### 16b. UpgradeCancelledEvent
+**Topic:** `"upg_cncl"`
+
+Emitted when a pending upgrade is cancelled via `cancel_upgrade` before it is
+executed — the recovery path against a malicious or mistaken schedule (Issue #316).
+
+```rust
+pub struct UpgradeCancelledEvent {
+    pub cancelled_wasm_hash: BytesN<32>, // Hash of the WASM whose pending upgrade was cancelled
+}
+```
+
 ## Event Monitoring Guide
 
 ### For AI Agents
