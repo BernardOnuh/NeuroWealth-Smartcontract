@@ -224,6 +224,9 @@ VAULT_CONTRACT_ID="$vault_address"
 USDC_TOKEN_ADDRESS="$token_address"
 DEPLOYER_ADDRESS="$deployer_address"
 
+# Owner (deployer is the initial owner after initialize)
+OWNER_ADDRESS="$deployer_address"
+
 # AI Agent (using deployer key for testing)
 AGENT_SECRET_KEY="$SOROBAN_SECRET_KEY"
 AGENT_ADDRESS="$deployer_address"

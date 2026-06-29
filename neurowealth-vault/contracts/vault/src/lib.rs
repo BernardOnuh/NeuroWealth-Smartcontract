@@ -65,7 +65,8 @@
 //! ### Instance Storage (Contract-Wide, Expensive to Read/Write)
 //! - `Agent`: The authorized AI agent address that can call rebalance()
 //! - `UsdcToken`: The USDC token contract address
-//! - `TotalDeposits`: Total USDC held in vault (excluding yield deployed externally)
+//! - `TotalDeposits`: Total USDC principal deposited by users; never includes yield.
+//!   Use `TotalAssets` for share pricing and cap guards (see issue #299 / ARCHITECTURE.md).
 //! - `Paused`: Boolean flag for emergency pause state
 //! - `Owner`: Contract owner address for administrative functions
 //! - `TvlCap`: Maximum total value locked in the vault
@@ -3443,27 +3444,26 @@ impl NeuroWealthVault {
         }
     }
 
-    /// Returns the total USDC deposited in the vault.
+    /// Returns the total USDC principal deposited in the vault (issue #299).
     ///
-    /// This is the sum of all user principal balances. It represents the
-    /// total principal deposited by users and does NOT include yield that
-    /// may have been earned through external strategies.
+    /// **Relationship between `TotalDeposits`, `TotalAssets`, and shares:**
     ///
-    /// # Arguments
+    /// | Value | Includes yield? | Used for |
+    /// |---|---|---|
+    /// | `TotalDeposits` | No  | Principal bookkeeping and reporting only |
+    /// | `TotalAssets`   | Yes | Share pricing, TVL cap guard, user balances |
     ///
-    /// * `env` - The Soroban environment.
+    /// After `update_total_assets()` is called to reflect external yield,
+    /// `TotalAssets >= TotalDeposits`.  All economic quantities — share minting,
+    /// user redemption amounts, and the TVL cap check — use `TotalAssets`, never
+    /// `TotalDeposits`.  `TotalDeposits` is intentionally not synced on yield
+    /// updates; it is a principal-only counter useful for reporting.
+    ///
+    /// See also: `get_total_assets()`, ARCHITECTURE.md §"TotalDeposits vs TotalAssets".
     ///
     /// # Returns
     ///
     /// Returns total USDC principal deposits in raw units (7 decimal places).
-    ///
-    /// # Events
-    ///
-    /// None.
-    ///
-    /// # Errors
-    ///
-    /// None.
     ///
     /// # Panics
     ///
