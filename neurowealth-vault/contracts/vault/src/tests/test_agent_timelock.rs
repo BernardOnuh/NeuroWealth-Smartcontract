@@ -5,8 +5,8 @@
 //! - Confirm succeeds only after the timelock window and emits both confirm events.
 //! - Cancel clears the pending proposal and emits AgentUpdateCancelledEvent.
 //! - Duplicate proposals are rejected while one is pending.
-//! - Confirm before timelock is rejected with AgentTimelockNotExpired.
-//! - Confirm/cancel with no pending proposal are rejected with NoAgentUpdatePending.
+//! - Confirm before timelock is rejected with TimelockNotExpired (#50).
+//! - Confirm/cancel with no pending proposal are rejected with NoTimelockPending (#49).
 //! - Only the owner can propose, confirm, or cancel.
 
 use super::utils::*;
@@ -53,7 +53,7 @@ fn test_propose_while_pending_rejected() {
     let new_agent2 = Address::generate(&env);
 
     client.update_agent(&new_agent1);
-    // Second proposal while first is pending must panic with AgentUpdateAlreadyPending (48).
+    // Second proposal while first is pending must panic with TimelockAlreadyPending (#48).
     client.update_agent(&new_agent2);
 }
 
@@ -168,7 +168,7 @@ fn test_new_proposal_allowed_after_cancel() {
     assert!(client.get_pending_agent_update().is_some());
 }
 
-/// Confirm with no pending proposal must be rejected with NoAgentUpdatePending (49).
+/// Confirm with no pending proposal must be rejected with NoTimelockPending (#49).
 #[test]
 #[should_panic(expected = "Error(Contract, #49)")]
 fn test_confirm_with_no_pending_rejected() {
@@ -181,7 +181,7 @@ fn test_confirm_with_no_pending_rejected() {
     client.confirm_agent_update();
 }
 
-/// Cancel with no pending proposal must be rejected with NoAgentUpdatePending (49).
+/// Cancel with no pending proposal must be rejected with NoTimelockPending (#49).
 #[test]
 #[should_panic(expected = "Error(Contract, #49)")]
 fn test_cancel_with_no_pending_rejected() {

@@ -11,6 +11,26 @@ This changelog is tied to the vault contract `Version` storage value. Each relea
 ## [Unreleased]
 <!-- Add entries below. Format: `- Short description (Issue #N).` -->
 <!-- If this PR bumps get_version(), note the new Version value here. -->
+- **Timelocked contract upgrade (Issue #316):** the instant `upgrade()` is
+  replaced by a two-step, timelocked flow with a cancel path so a compromised
+  owner key can no longer swap WASM with no recovery window.
+  - New `schedule_upgrade(owner, new_wasm_hash)` records a pending hash and a
+    ≈24-hour (`UPGRADE_TIMELOCK_LEDGERS`) expiry ledger; `execute_upgrade(owner)`
+    applies it only after the timelock; `cancel_upgrade(owner)` clears a pending
+    upgrade. `get_pending_upgrade()` exposes the pending hash and expiry.
+  - New storage keys `DataKey::PendingUpgradeHash` / `UpgradeTimelockExpiry`.
+  - New events `UpgradeScheduledEvent` (`upg_sched`) and `UpgradeCancelledEvent`
+    (`upg_cncl`); `UpgradedEvent` is now emitted by `execute_upgrade`. See EVENTS.md.
+  - Error codes 48–50 are generalized from agent-specific to shared timelock
+    names (`TimelockAlreadyPending`, `NoTimelockPending`, `TimelockNotExpired`)
+    and reused by both the agent (#317) and upgrade timelocks, since the SDK caps
+    `#[contracterror]` enums at 50 cases. Numeric codes are unchanged.
+  - No `Version` bump (pre-mainnet).
+- Add snapshot tests for the DEX event payloads `DexSupplyEvent`,
+  `DexWithdrawEvent`, and `DexPoolConfiguredEvent`, mirroring the existing Blend
+  event snapshot tests (Issue #340).
+- Add ApprovalTtl test coverage for the DEX supply path: default TTL, configured
+  TTL, and min/max bound rejection, mirroring the Blend coverage (Issue #341).
 - `deploy-devnet.sh` now writes `OWNER_ADDRESS` to `devnet-contracts.env` so
   `verify-deployment.sh` can run without missing-variable errors (Issue #298).
 - Document the `TotalDeposits` vs `TotalAssets` design decision in `lib.rs`,

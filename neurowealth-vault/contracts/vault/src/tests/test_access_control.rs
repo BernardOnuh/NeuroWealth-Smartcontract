@@ -303,7 +303,7 @@ fn test_non_owner_cannot_upgrade() {
 
     let non_owner = Address::generate(&env);
     let fake_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
-    client.upgrade(&non_owner, &fake_wasm_hash);
+    client.schedule_upgrade(&non_owner, &fake_wasm_hash);
 }
 
 // ============================================================================
@@ -714,7 +714,7 @@ fn test_agent_cannot_upgrade() {
 
     let fake_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
     // agent is distinct from owner, so this should panic
-    client.upgrade(&agent, &fake_wasm_hash);
+    client.schedule_upgrade(&agent, &fake_wasm_hash);
 }
 
 // ============================================================================

@@ -40,3 +40,5 @@ pub const TOPIC_REBALANCE_FAILED: Symbol = symbol_short!("reb_fail");
 pub const TOPIC_AGENT_UPDATE_PROPOSED: Symbol = symbol_short!("agt_prop");
 pub const TOPIC_AGENT_UPDATE_CONFIRMED: Symbol = symbol_short!("agt_conf");
 pub const TOPIC_AGENT_UPDATE_CANCELLED: Symbol = symbol_short!("agt_cncl");
+pub const TOPIC_UPGRADE_SCHEDULED: Symbol = symbol_short!("upg_sched");
+pub const TOPIC_UPGRADE_CANCELLED: Symbol = symbol_short!("upg_cncl");

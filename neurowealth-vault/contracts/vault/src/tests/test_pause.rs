@@ -199,7 +199,7 @@ fn test_upgrade_blocked_while_paused() {
     assert!(client.is_paused());
 
     let fake_hash = BytesN::from_array(&env, &[0u8; 32]);
-    client.upgrade(&owner, &fake_hash);
+    client.schedule_upgrade(&owner, &fake_hash);
 }
 
 #[test]
