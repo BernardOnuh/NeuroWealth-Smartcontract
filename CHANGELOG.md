@@ -11,6 +11,12 @@ This changelog is tied to the vault contract `Version` storage value. Each relea
 ## [Unreleased]
 <!-- Add entries below. Format: `- Short description (Issue #N).` -->
 <!-- If this PR bumps get_version(), note the new Version value here. -->
+- `deploy-devnet.sh` now writes `OWNER_ADDRESS` to `devnet-contracts.env` so
+  `verify-deployment.sh` can run without missing-variable errors (Issue #298).
+- Document the `TotalDeposits` vs `TotalAssets` design decision in `lib.rs`,
+  `ARCHITECTURE.md`, and `test_total_assets_cap.rs`; `TotalDeposits` is
+  intentionally not synced on yield — all cap guards use `TotalAssets`
+  (Issue #299).
 - Add GitHub issue templates as structured YAML forms (Issue #330).
 - Migrate weak `!events.is_empty()` test assertions to strict payload checks (Issue #333).
 - Dedicated `TvlCapUpdatedEvent` / `UserDepositCapUpdatedEvent` replace ambiguous
