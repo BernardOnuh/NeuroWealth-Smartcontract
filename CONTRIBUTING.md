@@ -77,10 +77,12 @@ To contribute to the smart contracts, you'll need the following installed:
 
 - **Rust**: Latest stable version. [Install Rust](https://rustup.rs/)
 - **WASM Target**: `rustup target add wasm32-unknown-unknown`
-- **Stellar CLI**: We recommend version **21.2.0** or later.
+- **Stellar CLI**: The required version is pinned in [`.stellar-version`](.stellar-version) at the repo root. Install the exact pinned version to avoid build and deployment drift:
   ```bash
-  cargo install --locked stellar-cli --version 21.2.0
+  STELLAR_VERSION=$(cat .stellar-version | tr -d '[:space:]')
+  cargo install --locked stellar-cli --version "$STELLAR_VERSION" --features opt
   ```
+  Using a different version than the pin is the most common cause of CI failures locally.
 - **Node.js & npm**: For agent and frontend development (LTS version recommended).
 
 ### Building the Contract

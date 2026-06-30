@@ -120,7 +120,10 @@ NeuroWealth-Smartcontract/
 │   ├── monitoring.md
 │   └── state-machine.md
 ├── test/                           # Off-chain security tests
+│   ├── NotOwnerCompromiseBlastRadius.test.ts
 │   └── OwnerCompromiseBlastRadius.test.ts
+├── test_tvl_cap_stress/            # Standalone TVL-cap stress harness
+│   └── test_tvl_cap_stress.rs
 ├── .env.devnet.template
 ├── .github/
 │   ├── ISSUE_TEMPLATE/
@@ -161,9 +164,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add wasm32-unknown-unknown
 ```
 
-Install the Stellar CLI (pinned to 21.2.0):
+Install the Stellar CLI (version pinned in [`.stellar-version`](.stellar-version)):
 ```bash
-cargo install --locked stellar-cli --version 21.2.0 --features opt
+STELLAR_VERSION=$(cat .stellar-version | tr -d '[:space:]')
+cargo install --locked stellar-cli --version "$STELLAR_VERSION" --features opt
 ```
 
 ### Environment Variables
