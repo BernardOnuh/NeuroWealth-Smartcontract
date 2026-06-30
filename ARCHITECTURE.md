@@ -102,7 +102,36 @@ pub enum DataKey {
 
 ## Share Accounting Model
 
-The vault uses a share-based accounting model compatible with the ERC-4626 standard. This allows the vault to accurately track each user's proportional ownership of the total managed assets, including accrued yield.
+The vault uses a share-based accounting model compatible with the ERC-4626 standard. Each depositor receives vault shares proportional to their contribution at the time of deposit. As yield accrues and `TotalAssets` grows relative to `TotalShares`, each share appreciates in value — meaning later redeemers receive more USDC per share than they originally paid.
+
+### Share Pricing
+
+```
+exchange_rate = TotalAssets / TotalShares          (assets per share)
+
+shares_minted = (deposit_amount × TotalShares) / TotalAssets
+assets_out    = (shares_burned × TotalAssets)  / TotalShares
+```
+
+The on-chain getter `get_exchange_rate()` returns `TotalAssets × 10_000_000 / TotalShares` (7-decimal fixed-point) to avoid fractional values.
+
+### Yield Accrual via update_total_assets
+
+The AI agent calls `update_total_assets(new_total)` to report yield earned in external protocols (e.g. Blend). This increases `TotalAssets` without changing `TotalShares`, which raises the share price for all holders. The update is bounded: a single call cannot decrease `TotalAssets` below the current value, and cannot increase it beyond a configurable maximum basis-point delta, preventing the agent from inflating balances arbitrarily.
+
+### Blend Deployment
+
+When the agent calls `rebalance(protocol="blend", ...)` the vault:
+
+1. Approves the Blend pool to pull vault USDC (short-lived TTL approval stored in `BlendApprovalTtl`).
+2. Calls `blend_pool.submit_with_allowance()` to supply USDC as a lender.
+3. Records `CurrentProtocol = "blend"`.
+
+On withdrawal, if the vault's idle balance is insufficient, it calls `blend_pool.submit()` to withdraw the required amount before transferring to the user.
+
+### Historical: Phase 1 (1:1 accounting — deprecated)
+
+Prior to the ERC-4626 model, the vault used simple 1:1 balance accounting: 1 deposited USDC = 1 vault balance unit, with no share concept. This approach could not track proportional yield and has been fully replaced. The `Balance(Address)` key is retained only for legacy migration paths and is no longer the authoritative ownership record — `Shares(Address)` is.
 
 ### Current Implementation (Share-Based)
 
@@ -117,12 +146,6 @@ assets = (shares * total_assets) / total_shares
 - **Proportional Yield**: Users benefit from yield accrual as the `TotalAssets` increases relative to `TotalShares`.
 - **Atomic Conversions**: Deposits mint shares and withdrawals burn shares based on the real-time asset/share ratio.
 - **ERC-4626 Compatibility**: Implements standard preview and conversion functions.
-
-### Historical Implementation (Phase 1 - Deprecated)
-
-Initial versions used a simple 1:1 asset accounting model:
-- 1 deposited USDC = 1 vault balance unit.
-- Limitations included inability to track share of yield earned and no proportional withdrawals.
 
 ## Rounding Rules
 
@@ -322,22 +345,31 @@ When upgrading the contract, the following storage keys must be preserved:
 
 | Version | Changes | Status |
 |---------|---------|--------|
-| 1 | Initial implementation with 1:1 accounting | Historical |
-| 2 | ERC-4626 share accounting and Blend integration | **Current** |
+| 1 | Initial 1:1 balance accounting (no shares) | Historical — superseded |
+| 2 | ERC-4626 share accounting, Blend integration, rounding rules | **Current** |
 | 3 | (Planned) Multi-asset support and advanced rebalancing | Future |
 
 ## Error Handling
 
-### Panic Messages
+Errors are surfaced as typed `VaultError` contract errors rather than raw panic
+strings. See [ERROR_STYLE_GUIDE.md](ERROR_STYLE_GUIDE.md) for the full code
+table and wording conventions.
 
-| Function | Panic Condition |
-|----------|----------------|
-| `initialize` | "Already initialized" |
-| `deposit` | "Vault is paused", "Amount must be positive", "Minimum deposit is 1 USDC", "Exceeds user deposit cap", "Exceeds TVL cap" |
-| `withdraw` | "Vault is paused", "Amount must be positive", "Insufficient balance" |
-| `rebalance` | "Vault is paused" |
-| `pause` | (requires owner auth) |
-| `unpause` | "Vault is not paused" |
+### Key error codes by function
+
+| Function | VaultError variant (code) | Condition |
+|----------|--------------------------|-----------|
+| `initialize` | `AlreadyInitialized` (#4) | Called more than once |
+| `deposit` | `Paused` (#35) | Vault is paused |
+| `deposit` | `AmountMustBePositive` (#37) | amount ≤ 0 |
+| `deposit` | `BelowMinimumDeposit` (#38) | amount < min_deposit |
+| `deposit` | `ExceedsUserDepositCap` (#40) | user cumulative > cap |
+| `deposit` | `ExceedsTvlCap` (#41) | total_assets + amount > tvl_cap |
+| `withdraw` | `Paused` (#35) | Vault is paused |
+| `withdraw` | `AmountMustBePositive` (#37) | amount ≤ 0 |
+| `withdraw` | `InsufficientShares` (#8) | shares to burn > user shares |
+| `rebalance` | `Paused` (#35) | Vault is paused |
+| `unpause` | `NotPaused` (#21) | Called when not paused |
 
 ### Return Values
 
