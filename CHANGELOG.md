@@ -11,6 +11,15 @@ This changelog is tied to the vault contract `Version` storage value. Each relea
 ## [Unreleased]
 <!-- Add entries below. Format: `- Short description (Issue #N).` -->
 <!-- If this PR bumps get_version(), note the new Version value here. -->
+- **Shares-only balance accounting (Issue #184):** `DataKey::Balance(Address)`
+  is confirmed deprecated and unused by core deposit/withdraw/getter logic;
+  the discriminant is retained only to preserve the serialized `DataKey`
+  layout across upgrades. `get_balance(user)` derives principal purely from
+  `Shares(user)` and the current total-assets/total-shares exchange rate.
+  `test_balance_shares_invariant.rs` asserts `get_balance(user)` stays within
+  rounding tolerance of `convert_to_assets(get_shares(user))` across the
+  vault lifecycle, closing the audit concern about drift between principal
+  and shares.
 - **Timelocked contract upgrade (Issue #316):** the instant `upgrade()` is
   replaced by a two-step, timelocked flow with a cancel path so a compromised
   owner key can no longer swap WASM with no recovery window.
