@@ -34,8 +34,9 @@
 #   EXPECTED_MIN_DEPOSIT      — expected minimum deposit
 #   EXPECTED_MAX_DEPOSIT      — expected maximum deposit
 #
-# Optional Blend pool check:
+# Optional protocol pool checks:
 #   BLEND_POOL_ADDRESS    — if set, verifies get_blend_pool() matches this value
+#   DEX_POOL_ADDRESS      — if set, verifies get_dex_pool() matches this value
 #
 # Exit codes:
 #   0  — All checks passed
@@ -394,6 +395,33 @@ else
         pass "get_blend_pool matches BLEND_POOL_ADDRESS"
       else
         fail "get_blend_pool mismatch: on-chain=$BLEND_NORM expected=$EXPECTED_BLEND"
+      fi
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 9. DEX pool address (optional — skip if DEX_POOL_ADDRESS not set)
+# ---------------------------------------------------------------------------
+
+if [[ -z "${DEX_POOL_ADDRESS:-}" ]]; then
+  info "DEX pool check skipped — DEX_POOL_ADDRESS not set"
+else
+  DEX_OUTPUT=$(invoke_view "get_dex_pool" get_dex_pool) || {
+    fail "get_dex_pool invocation failed"
+    DEX_OUTPUT=""
+  }
+
+  if [[ -n "$DEX_OUTPUT" ]]; then
+    DEX_NORM=$(normalize_address "$DEX_OUTPUT")
+    if [[ "$DEX_NORM" == "null" || -z "$DEX_NORM" ]]; then
+      fail "get_dex_pool returned null — DEX pool not configured on-chain"
+    else
+      EXPECTED_DEX=$(normalize_address "$DEX_POOL_ADDRESS")
+      if [[ "$DEX_NORM" == "$EXPECTED_DEX" ]]; then
+        pass "get_dex_pool matches DEX_POOL_ADDRESS"
+      else
+        fail "get_dex_pool mismatch: on-chain=$DEX_NORM expected=$EXPECTED_DEX"
       fi
     fi
   fi

@@ -487,10 +487,13 @@ pub mod dex {
 
         /// Returns the liquidity position held for `_user` in `asset`.
         pub fn balance(env: Env, asset: Address, _user: Address) -> i128 {
-            env.storage()
+            let supplied: i128 = env
+                .storage()
                 .persistent()
-                .get(&DexMockDataKey::Supplied(asset))
-                .unwrap_or(0)
+                .get(&DexMockDataKey::Supplied(asset.clone()))
+                .unwrap_or(0);
+            let token_bal = TestTokenClient::new(&env, &asset).balance(&env.current_contract_address());
+            core::cmp::max(supplied, token_bal)
         }
 
         /// Sets a max supply limit to simulate slippage / partial fills.
