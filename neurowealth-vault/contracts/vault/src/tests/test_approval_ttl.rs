@@ -240,3 +240,42 @@ fn test_dex_position_set_approval_ttl_rejects_above_maximum() {
         "set_approval_ttl should reject TTL above maximum on the DEX path"
     );
 }
+
+// ─── Blend approval TTL regression test (#381) ────────────────────────────────
+//
+// This test verifies that set_blend_approval_ttl actually affects the approval
+// ledger used by supply_to_blend. Without this test, a storage-key mismatch
+// (e.g., using ApprovalTtl instead of BlendApprovalTtl) would go undetected.
+
+#[test]
+fn test_blend_approval_ttl_affects_supply_to_blend_approval_ledger() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    // Set a custom Blend approval TTL distinct from the default
+    let custom_ttl = 7_500_u32;
+    client.set_blend_approval_ttl(&owner, &custom_ttl);
+
+    // Deposit funds to enable supply_to_blend
+    let user = Address::generate(&env);
+    mint_and_deposit(&env, &client, &usdc_token, &user, 10_000_000_i128);
+
+    // Trigger supply_to_blend via rebalance
+    let sequence = env.ledger().sequence();
+    client.rebalance(&symbol_short!("blend"), &700_i128, &0_i128);
+
+    // Assert the approval expiration uses the custom TTL, not the default
+    let expiration = token_client.allowance_expiration(&contract_id, &blend_pool);
+    assert_eq!(
+        expiration,
+        sequence + custom_ttl,
+        "approval expiration should reflect custom BlendApprovalTtl, not default"
+    );
+}

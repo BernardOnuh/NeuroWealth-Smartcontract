@@ -36,3 +36,9 @@ name = "share_accounting_invariants"
 path = "fuzz_targets/share_accounting_invariants.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "upgrade_timelock"
+path = "fuzz_targets/upgrade_timelock.rs"
+test = false
+doc = false
