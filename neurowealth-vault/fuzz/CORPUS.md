@@ -39,6 +39,18 @@ This directory contains fuzz testing harnesses for the NeuroWealth Vault contrac
 4. `user_balance <= expected_balance` (proportional share)
 5. Exchange rate >= 1.0
 
+### 5. `upgrade_timelock`
+**Purpose**: Tests the upgrade timelock state machine with random schedule/execute/cancel sequences interleaved with ledger advances.
+**Input format**: 2-byte chunks where:
+- Byte 0: Operation selector (0=schedule_upgrade, 1=execute_upgrade, 2=cancel_upgrade, 3=advance ledger)
+- Byte 1: Parameter selector (hash seed or advance amount)
+**Invariants checked**:
+1. `execute_upgrade` fails before timelock expires
+2. `execute_upgrade` succeeds after timelock expires (given pending proposal)
+3. `cancel_upgrade` always clears pending state
+4. `schedule_upgrade` fails while another proposal is pending
+5. Pending state consistency between storage and get_pending_upgrade()
+
 ## Running Fuzz Tests
 
 ```bash
