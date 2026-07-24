@@ -85,9 +85,10 @@ The AI agent can move funds between protocols via `rebalance()`, but is constrai
 
 ### 4. Upgrade Risks
 
-The contract owner can upgrade the contract code. This introduces:
-- **Single Point of Failure**: The owner key is a high-value target.
-- **Mitigation**: Use multi-sig for the owner and timelocks for code upgrades.
+The contract owner can upgrade the contract code. To protect against malicious or accidental instant code changes, upgrade risk is mitigated via a mandatory two-step timelock mechanism:
+- **Two-Step Timelock**: Upgrades must first be scheduled via `schedule_upgrade(new_wasm_hash)`, initiating a timelock delay before `execute_upgrade()` can be called.
+- **Cancellation Window**: During the timelock window, the owner or security monitoring can invoke `cancel_upgrade()` to abort a compromised or erroneous upgrade proposal.
+- **Owner Multi-Sig Recommended**: For mainnet deployment, owner authority should be held by a multi-sig account.
 
 ### 5. State Rent & TTL Expiry
 
@@ -100,7 +101,9 @@ Soroban persistent entries (such as each user's `Shares` record) accrue state re
 
 | Function | Owner | Agent | User | Anyone |
 |----------|-------|-------|------|--------|
-| set_agent | ✅ | - | - | - |
+| update_agent | ✅ | - | - | - |
+| confirm_agent_update | ✅ | - | - | - |
+| cancel_agent_update | ✅ | - | - | - |
 | update_total_assets | - | ✅ | - | - |
 | deposit | - | - | ✅ | - |
 | withdraw | - | - | ✅ | - |
@@ -109,7 +112,9 @@ Soroban persistent entries (such as each user's `Shares` record) accrue state re
 | emergency_pause | - | ✅ | - | - |
 | unpause | ✅ | - | - | - |
 | set_caps | ✅ | - | - | - |
-| upgrade | ✅ | - | - | - |
+| schedule_upgrade | ✅ | - | - | - |
+| execute_upgrade | ✅ | - | - | - |
+| cancel_upgrade | ✅ | - | - | - |
 | set_blend_pool | ✅ | - | - | - |
 | set_dex_pool | ✅ | - | - | - |
 | transfer_ownership | ✅ | - | - | - |
@@ -168,11 +173,13 @@ is still doing:
 | Current paused state | `stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_paused` |
 | Current owner address | `stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_owner` |
 | Current agent address | `stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_agent` |
+| Pending agent update | `stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_pending_agent_update` |
+| Pending contract upgrade | `stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_pending_upgrade` |
 | Active protocol (idle/blend/dex) | `stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_current_protocol` |
 | TVL cap | `stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_tvl_cap` |
 
 Owner-only actions an attacker with the key could have taken:
-- Called `set_agent` to replace the AI agent with a malicious address.
+- Initiated `update_agent` or `schedule_upgrade` to queue a malicious agent or WASM upgrade.
 - Called `set_blend_pool` or `set_dex_pool` to point the vault at a drain contract.
 - Called `set_caps` to raise or remove deposit limits.
 - Initiated `transfer_ownership` to a new address they control.
@@ -208,14 +215,25 @@ If the compromised key has already been used to initiate an attacker-controlled
 You must call `accept_ownership` from the *legitimate* new owner before the
 attacker does. Check `DataKey::PendingOwner` on-chain immediately.
 
-### Step 4 — Revert any attacker configuration changes
+### Step 4 — Revert any attacker configuration changes & pending timelocks
 
-Once the new owner key is in place, audit and reset all owner-controlled state:
+Once the new owner key is in place, audit and reset all owner-controlled state and cancel pending malicious timelocks:
 
 ```bash
-# Reset agent to the legitimate AI agent address [owner]
+# Cancel any pending malicious agent update or contract upgrade scheduled by attacker [owner]
 stellar contract invoke --id $VAULT_CONTRACT_ID --source <NEW_OWNER_KEY> \
-  --network mainnet -- set_agent --agent <LEGITIMATE_AGENT_ADDRESS>
+  --network mainnet -- cancel_agent_update
+
+stellar contract invoke --id $VAULT_CONTRACT_ID --source <NEW_OWNER_KEY> \
+  --network mainnet -- cancel_upgrade
+
+# Initiate and confirm agent update to legitimate AI agent address via timelock [owner]
+stellar contract invoke --id $VAULT_CONTRACT_ID --source <NEW_OWNER_KEY> \
+  --network mainnet -- update_agent --new_agent <LEGITIMATE_AGENT_ADDRESS>
+
+# (After timelock window expires)
+stellar contract invoke --id $VAULT_CONTRACT_ID --source <NEW_OWNER_KEY> \
+  --network mainnet -- confirm_agent_update
 
 # Reset pool addresses to audited contracts [owner]
 stellar contract invoke --id $VAULT_CONTRACT_ID --source <NEW_OWNER_KEY> \

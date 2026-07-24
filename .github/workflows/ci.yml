@@ -212,14 +212,22 @@ jobs:
             vault_src:
               - 'neurowealth-vault/contracts/vault/src/**'
 
-  fuzz-deposit-withdraw:
-    name: Fuzz deposit/withdraw
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [changes]
     if: |
       github.event_name == 'schedule' ||
       (github.event_name == 'pull_request' && needs.changes.outputs.vault_src == 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - deposit_withdraw_sequence
+          - rebalance_transitions
+          - rounding_boundaries
+          - share_accounting_invariants
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -235,15 +243,15 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
-      - name: Run deposit/withdraw fuzz target (PR – short bounds)
+      - name: Run ${{ matrix.target }} fuzz target (PR – short bounds)
         if: github.event_name == 'pull_request'
         working-directory: neurowealth-vault
-        run: cargo fuzz run deposit_withdraw_sequence -- -runs=1000 -max_total_time=120
+        run: cargo fuzz run ${{ matrix.target }} -- -runs=1000 -max_total_time=120
 
-      - name: Run deposit/withdraw fuzz target (scheduled – full bounds)
+      - name: Run ${{ matrix.target }} fuzz target (scheduled – full bounds)
         if: github.event_name == 'schedule'
         working-directory: neurowealth-vault
-        run: cargo fuzz run deposit_withdraw_sequence -- -runs=5000 -max_total_time=300
+        run: cargo fuzz run ${{ matrix.target }} -- -runs=5000 -max_total_time=300
 
   e2e-devnet:
     name: E2E Devnet Validation

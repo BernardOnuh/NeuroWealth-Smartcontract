@@ -9,9 +9,10 @@ This document outlines the mandatory formal verification steps, configuration pa
 2. [Initialization Parameters & Deployment Verification](#2-initialization-parameters--deployment-verification)
 3. [Administrative Caps & Deposit Limits Configuration](#3-administrative-caps--deposit-limits-configuration)
 4. [Blend Pool Integration & Address Verification](#4-blend-pool-integration--address-verification)
-5. [Emergency Procedures & Pause Drill Runbook](#5-emergency-procedures--pause-drill-runbook)
-6. [Upgrade & Governance Multisig Plan](#6-upgrade--governance-multisig-plan)
-7. [Third-Party Security Audit & Formal Sign-off](#7-third-party-security-audit--formal-sign-off)
+5. [DEX Pool Integration & Address Verification](#5-dex-pool-integration--address-verification)
+6. [Emergency Procedures & Pause Drill Runbook](#6-emergency-procedures--pause-drill-runbook)
+7. [Upgrade & Governance Multisig Plan](#7-upgrade--governance-multisig-plan)
+8. [Third-Party Security Audit & Formal Sign-off](#8-third-party-security-audit--formal-sign-off)
 
 ---
 
@@ -174,7 +175,42 @@ The NeuroWealth AI agent deploys assets into Blend lending pools. Registering th
 
 ---
 
-## 5. Emergency Procedures & Pause Drill Runbook
+## 5. DEX Pool Integration & Address Verification
+
+The NeuroWealth AI agent deploys assets into DEX liquidity pools for active trading strategies. Registering the correct, verified mainnet contract address for the target DEX pool is critical.
+
+### 🔍 Security Context
+* Deploying to an incorrect, unverified, or malicious pool address could result in permanent loss of funds or slippage exploitation.
+* Interface validation alone does not confirm that the DEX pool is genuine or safe. Address verification against trusted registries is mandatory before deployment.
+
+### 📝 Actionable Checklist
+- [ ] **Retrieve Official DEX Registries:** Match the DEX pool mainnet address against official protocol documentation and verified on-chain deployment logs.
+- [ ] **Perform Interface/State Verification:** Verify DEX pool parameters and liquidity depth.
+- [ ] **Register Verified DEX Pool:** Call `set_dex_pool` using the Owner key:
+  ```bash
+  stellar contract invoke \
+    --id $VAULT_CONTRACT_ID \
+    --source owner \
+    --network mainnet \
+    -- \
+    set_dex_pool \
+    --owner $OWNER_ADDRESS \
+    --pool_address $VERIFIED_DEX_POOL_ADDRESS
+  ```
+- [ ] **Read Verification:** Query `get_dex_pool` on the vault to confirm the registered address matches the verified DEX pool address.
+
+> **Automated check** — set `DEX_POOL_ADDRESS` and `scripts/verify-deployment.sh` will assert that `get_dex_pool()` returns that exact address (not null):
+> ```bash
+> VAULT_CONTRACT_ID=C... NETWORK=mainnet \
+>   OWNER_ADDRESS=G... AGENT_ADDRESS=G... AGENT_SECRET_KEY=S... \
+>   USDC_TOKEN_ADDRESS=G... \
+>   DEX_POOL_ADDRESS=C... \
+>   ./scripts/verify-deployment.sh
+> ```
+
+---
+
+## 6. Emergency Procedures & Pause Drill Runbook
 
 Before deploying to Mainnet, the team must run an on-chain Pause Drill on Testnet to guarantee emergency mechanisms function as intended and operators are trained in execution.
 
@@ -203,7 +239,7 @@ Before deploying to Mainnet, the team must run an on-chain Pause Drill on Testne
 
 ---
 
-## 6. Upgrade & Governance Multisig Plan
+## 7. Upgrade & Governance Multisig Plan
 
 The Owner key holds upgrade privileges. To secure the contract against single-key compromise or loss, the owner account should be configured with multi-signature security.
 
@@ -225,7 +261,7 @@ The Owner key holds upgrade privileges. To secure the contract against single-ke
 
 ---
 
-## 7. Third-Party Security Audit & Formal Sign-off
+## 8. Third-Party Security Audit & Formal Sign-off
 
 No smart contract should be deployed on-chain without an independent security audit and formal sign-off.
 
