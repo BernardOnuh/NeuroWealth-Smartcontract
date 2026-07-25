@@ -4751,11 +4751,10 @@ impl NeuroWealthVault {
             return 0;
         }
 
-        let pool_address: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::BlendPool)
-            .expect("vault: blend pool not configured");
+        let pool_address: Address = env.storage().instance().get(&DataKey::BlendPool).unwrap_or_else(|| {
+            panic_with_error!(env, VaultError::BlendPoolNotConfigured);
+            unreachable!()
+        });
 
         let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
         let vault_address = env.current_contract_address();
@@ -4873,11 +4872,10 @@ impl NeuroWealthVault {
     /// - Panics if Blend pool address is not configured
     /// - Emits BlendWithdrawEvent with success status and actual amount received
     fn withdraw_from_blend(env: &Env, amount: i128, min_out: i128) -> i128 {
-        let pool_address: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::BlendPool)
-            .expect("vault: blend pool not configured");
+        let pool_address: Address = env.storage().instance().get(&DataKey::BlendPool).unwrap_or_else(|| {
+            panic_with_error!(env, VaultError::BlendPoolNotConfigured);
+            unreachable!()
+        });
 
         let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
         let vault_address = env.current_contract_address();
@@ -4953,11 +4951,10 @@ impl NeuroWealthVault {
             return 0;
         }
 
-        let pool_address: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::DexPool)
-            .expect("vault: dex pool not configured");
+        let pool_address: Address = env.storage().instance().get(&DataKey::DexPool).unwrap_or_else(|| {
+            panic_with_error!(env, VaultError::DexPoolNotConfigured);
+            unreachable!()
+        });
 
         let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
         let vault_address = env.current_contract_address();
@@ -5072,11 +5069,10 @@ impl NeuroWealthVault {
     /// - Panics with `MinOutNotMet` if the realized amount is below `min_out`
     /// - Emits `DexWithdrawEvent` with success status and actual amount received
     fn withdraw_from_dex(env: &Env, amount: i128, min_out: i128) -> i128 {
-        let pool_address: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::DexPool)
-            .expect("vault: dex pool not configured");
+        let pool_address: Address = env.storage().instance().get(&DataKey::DexPool).unwrap_or_else(|| {
+            panic_with_error!(env, VaultError::DexPoolNotConfigured);
+            unreachable!()
+        });
 
         let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
         let vault_address = env.current_contract_address();

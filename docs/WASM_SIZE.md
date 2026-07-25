@@ -6,6 +6,10 @@ The CI pipeline fails if the optimised contract WASM exceeds **1.5 MB** (configu
 
 Stellar's Soroban network enforces a `maxContractSizeBytes` network parameter that caps how large a contract WASM can be when uploaded via `stellar contract upload`. The CI gate sits well below that limit to catch unintentional bloat early and leave room for future feature additions.
 
+## Trend Tracking
+
+The CI workflow now records the latest optimised WASM size for merged commits in `.github/wasm-size-history.json` and uses that baseline when a PR runs. The PR check reports the size delta versus the base branch in the workflow summary so gradual growth is visible even when the binary stays under the hard limit.
+
 ## Why This Matters
 
 | Issue | Consequence |

@@ -9,6 +9,9 @@ on:
   schedule:
     - cron: "0 3 * * 0"
 
+permissions:
+  contents: write
+
 env:
   # Maximum allowed size in bytes for the optimised contract WASM.
   # Raise this in the same PR as any deliberate feature addition that grows
@@ -124,6 +127,54 @@ jobs:
 
               WASM_SIZE=$(stat -c%s "$WASM_FILE")
               LIMIT="${WASM_SIZE_LIMIT_BYTES:-1500000}"
+              BASE_BRANCH="${GITHUB_BASE_REF:-${GITHUB_REF_NAME}}"
+              BASELINE_FILE=".github/wasm-size-history.json"
+              BASELINE_SOURCE_FILE="$BASELINE_FILE"
+              BASELINE_SIZE=""
+              DELTA_BYTES=""
+              DELTA_DISPLAY="n/a"
+
+              if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+                git fetch origin "$BASE_BRANCH" --depth=1 >/dev/null 2>&1 || true
+                if git show "origin/$BASE_BRANCH:$BASELINE_SOURCE_FILE" > "$RUNNER_TEMP/wasm-size-baseline.json" 2>/dev/null; then
+                  BASELINE_FILE="$RUNNER_TEMP/wasm-size-baseline.json"
+                else
+                  BASELINE_FILE="$BASELINE_SOURCE_FILE"
+                fi
+              fi
+
+              if [ -f "$BASELINE_FILE" ]; then
+                BASELINE_SIZE=$(python3 - "$BASELINE_FILE" "$BASE_BRANCH" <<'PY'
+import json
+import sys
+
+path, branch = sys.argv[1], sys.argv[2]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except (FileNotFoundError, json.JSONDecodeError):
+    print("")
+    raise SystemExit(0)
+
+entry = data.get(branch, {}).get("latest")
+if entry:
+    print(entry.get("size_bytes", ""))
+else:
+    print("")
+PY
+)
+              fi
+
+              if [ -n "$BASELINE_SIZE" ]; then
+                DELTA_BYTES=$((WASM_SIZE - BASELINE_SIZE))
+                if [ "$DELTA_BYTES" -gt 0 ]; then
+                  DELTA_DISPLAY="+$DELTA_BYTES bytes"
+                elif [ "$DELTA_BYTES" -lt 0 ]; then
+                  DELTA_DISPLAY="$DELTA_BYTES bytes"
+                else
+                  DELTA_DISPLAY="0 bytes"
+                fi
+              fi
 
               {
                 echo "## WASM Size Report"
@@ -132,6 +183,13 @@ jobs:
                 echo "|--------|-------|"
                 echo "| Optimised size | ${WASM_SIZE} bytes |"
                 echo "| Limit          | ${LIMIT} bytes |"
+                if [ -n "$BASELINE_SIZE" ]; then
+                  echo "| Baseline (${BASE_BRANCH}) | ${BASELINE_SIZE} bytes |"
+                  echo "| Delta vs ${BASE_BRANCH} | ${DELTA_DISPLAY} |"
+                else
+                  echo "| Baseline (${BASE_BRANCH}) | n/a |"
+                  echo "| Delta vs ${BASE_BRANCH} | n/a |"
+                fi
               } >> "$GITHUB_STEP_SUMMARY"
 
               if [ "$WASM_SIZE" -gt "$LIMIT" ]; then
@@ -141,6 +199,48 @@ jobs:
               else
                 echo "| Status | :white_check_mark: OK |" >> "$GITHUB_STEP_SUMMARY"
                 echo "Optimised WASM is ${WASM_SIZE} bytes — within the ${LIMIT}-byte limit."
+              fi
+
+              if [ "$GITHUB_EVENT_NAME" = "push" ] && { [ "$GITHUB_REF_NAME" = "main" ] || [ "$GITHUB_REF_NAME" = "develop" ]; }; then
+                python3 - "$WASM_SIZE" "$GITHUB_SHA" "$GITHUB_REF_NAME" "$BASELINE_FILE" <<'PY'
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+size, sha, branch, path = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+
+payload = {}
+if os.path.exists(path):
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+history = payload.get(branch, {}).get("history", [])
+history.append({"sha": sha, "size_bytes": size})
+updated_history = history[-20:]
+
+payload[branch] = {
+    "latest": {
+        "sha": sha,
+        "size_bytes": size,
+        "timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    },
+    "history": updated_history,
+}
+
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2)
+    handle.write("\n")
+
+subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
+subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
+subprocess.run(["git", "add", path], check=True)
+
+if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0:
+    subprocess.run(["git", "commit", "-m", f"chore(ci): update wasm size baseline for {branch}"], check=True)
+    subprocess.run(["git", "push", "origin", f"HEAD:{branch}"], check=True)
+PY
               fi
 
               # Export the WASM path for the artifact upload step.
