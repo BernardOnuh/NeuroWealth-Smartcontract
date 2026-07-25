@@ -177,11 +177,14 @@ Use this practical checklist for every upgrade.
 - [ ] Production data backup/export completed (if applicable/possible).
 
 ### Deployment
-- [ ] Upload new WASM to mainnet.
-- [ ] Execute `upgrade` transaction.
-- [ ] Verify the contract's reported version (if exposed).
-- [ ] Run the `migrate` entrypoint (if applicable).
-- [ ] Validate critical state via RPC queries.
+- [ ] **Step 1: Install WASM**: Install the compiled WASM binary to the Stellar ledger and obtain its hex hash.
+- [ ] **Step 2: Propose / Schedule Upgrade**: Call the `schedule_upgrade(owner, new_wasm_hash)` contract function (emits `UpgradeScheduledEvent`).
+- [ ] **Step 3: Monitor Timelock**: Monitor the 24-hour mandatory delay window (17,280 ledgers) for any `UpgradeScheduledEvent` or `UpgradeCancelledEvent` anomalies.
+  - If a mistake or key compromise is discovered, the owner must call `cancel_upgrade(owner)` (emits `UpgradeCancelledEvent`) immediately as an escape hatch.
+- [ ] **Step 4: Execute Upgrade**: Once the timelock expires (current ledger sequence >= `UpgradeTimelockExpiry`), call `execute_upgrade(owner)` (emits `UpgradedEvent`).
+- [ ] **Step 5: Run Migration**: Invoke the `migrate()` entrypoint immediately (if applicable).
+- [ ] **Step 6: Verify Version**: Call `get_version()` and verify it returns the incremented version.
+- [ ] **Step 7: Validate State**: Validate critical state and balances via RPC queries.
 
 ### After Deployment
 - [ ] Verify Total Assets, Total Shares, and random User Balances.
@@ -194,16 +197,18 @@ Use this practical checklist for every upgrade.
 
 ## 8. Mainnet Upgrade Procedure
 
-Recommended production flow for zero-downtime (or minimal downtime) upgrades:
+Recommended production flow for upgrading the vault under the timelock architecture:
 
-1. **Step 1:** Deploy and test the upgrade extensively on a local environment using a mainnet state fork.
-2. **Step 2:** Deploy the WASM and execute the upgrade on Testnet.
-3. **Step 3:** Run the migration script on Testnet.
-4. **Step 4:** Verify storage integrity and run automated end-to-end flows on Testnet.
-5. **Step 5:** Schedule the mainnet upgrade and notify stakeholders if downtime is expected.
-6. **Step 6:** Pause the contract (if a pause feature exists) to prevent state drift during migration. Execute the WASM upgrade.
-7. **Step 7:** Run the migration script.
-8. **Step 8:** Unpause the contract and perform post-upgrade validation.
+1. **Step 1: Local Testing**: Deploy and test the upgrade extensively on a local environment using a mainnet state fork.
+2. **Step 2: Install WASM**: Upload the compiled new WASM contract to the Testnet network to get the WASM hash.
+3. **Step 3: Testnet Scheduling**: Call `schedule_upgrade` on Testnet.
+4. **Step 4: Testnet Execution**: After the timelock expires on Testnet, call `execute_upgrade` and run `migrate()`. Verify the flow works end-to-end.
+5. **Step 5: Mainnet scheduling announcement**: Schedule the mainnet upgrade and notify stakeholders, detailing the proposed WASM hash and the scheduled execution ledger/time.
+6. **Step 6: Install WASM on Mainnet**: Install the WASM bytecode onto Mainnet to acquire the mainnet WASM hash.
+7. **Step 7: Schedule Upgrade (Step 1 of Timelock)**: Call `schedule_upgrade(owner, new_wasm_hash)` on the mainnet vault. This initiates the mandatory 24-hour window.
+8. **Step 8: Monitoring & Delay**: Monitor the network. Ensure no cancellation events are triggered and check that the correct hash is pending.
+9. **Step 9: Execute Upgrade (Step 2 of Timelock)**: Once the timelock sequence is reached, execute the upgrade via `execute_upgrade(owner)`.
+10. **Step 10: Run Migration**: Run the migration script and perform post-upgrade validation before resuming normal deposits and withdrawals.
 
 ---
 
