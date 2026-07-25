@@ -545,7 +545,7 @@ fn test_cancel_ownership_transfer_clears_pending() {
 }
 
 #[test]
-#[should_panic(expected = "vault: no pending owner to cancel")]
+#[should_panic(expected = "Error(Contract, #29)")]
 fn test_cancel_without_pending_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -553,7 +553,7 @@ fn test_cancel_without_pending_panics() {
     let (contract_id, _agent, _owner, _usdc_token) = setup_vault_with_token(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
-    // No pending transfer started
+    // No pending transfer started — expects VaultError::CallerIsNotPendingOwner (code 29)
     client.cancel_ownership_transfer();
 }
 

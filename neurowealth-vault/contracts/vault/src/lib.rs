@@ -125,6 +125,16 @@ use soroban_sdk::{
 };
 
 // ============================================================================
+// CONSTANTS
+// ============================================================================
+
+/// Default TVL cap applied at initialization: 100,000,000,000 stroops = 100M USDC.
+///
+/// Expressed in USDC's 7-decimal representation (1 USDC = 10_000_000 stroops).
+/// The owner can raise or lower this after deployment via `set_tvl_cap`.
+const DEFAULT_TVL_CAP: i128 = 100_000_000_000;
+
+// ============================================================================
 // ERROR TYPES
 // ============================================================================
 
@@ -188,7 +198,7 @@ pub enum VaultError {
     MaximumDepositBelowMinimum = 27,
     /// Caller is not allowed to configure a protocol pool.
     OnlyOwnerCanConfigurePool = 28,
-    /// Caller is not the pending owner.
+    /// Caller is not the pending owner (or no pending ownership transfer exists).
     CallerIsNotPendingOwner = 29,
     /// Caller is not allowed to update total assets.
     OnlyAgentCanUpdateTotalAssets = 30,
@@ -1194,7 +1204,7 @@ impl NeuroWealthVault {
         // Store the deployer address for future reference and signature verification
         env.storage().instance().set(&DataKey::Deployer, &deployer);
 
-        let tvl_cap = 100_000_000_000_i128; // 100M USDC default
+        let tvl_cap = DEFAULT_TVL_CAP;
 
         env.storage().instance().set(&DataKey::Agent, &agent);
         env.storage()
@@ -3080,7 +3090,7 @@ impl NeuroWealthVault {
             .storage()
             .instance()
             .get(&DataKey::PendingOwner)
-            .expect("vault: no pending owner");
+            .unwrap_or_else(|| panic_with_error!(&env, VaultError::CallerIsNotPendingOwner));
 
         Self::require(
             &env,
@@ -3136,7 +3146,7 @@ impl NeuroWealthVault {
             .storage()
             .instance()
             .get(&DataKey::PendingOwner)
-            .expect("vault: no pending owner to cancel");
+            .unwrap_or_else(|| panic_with_error!(&env, VaultError::CallerIsNotPendingOwner));
 
         let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
 
