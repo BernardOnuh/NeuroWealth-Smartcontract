@@ -26,7 +26,7 @@ Instance storage is used for contract-wide configuration that is read frequently
 | `PendingOwner` | Address | Pending owner for two-step transfer |
 | `TvLCap` | i128 | Maximum total value locked |
 | `UserDepositCap` | i128 | Maximum deposit per user |
-| `BlendApprovalTtl` | u32 | Ledger TTL used for Blend approvals |
+| `ApprovalTtl` | u32 | Shared ledger TTL used for Blend and DEX approvals |
 | `MinDeposit` | i128 | Minimum per-transaction deposit |
 | `MaxDeposit` | i128 | Maximum per-transaction deposit |
 | `Version` | u32 | Contract version for upgrade tracking |
@@ -90,7 +90,7 @@ pub enum DataKey {
     PendingOwner,         // pending owner for two-step transfer
     TvLCap,               // maximum TVL
     UserDepositCap,       // per-user deposit limit
-    BlendApprovalTtl,     // Blend approval lifetime
+    ApprovalTtl,          // shared protocol approval lifetime
     MinDeposit,           // minimum transaction amount
     MaxDeposit,           // maximum transaction amount
     Version,              // contract version
@@ -123,7 +123,7 @@ The AI agent calls `update_total_assets(new_total)` to report yield earned in ex
 
 When the agent calls `rebalance(protocol="blend", ...)` the vault:
 
-1. Approves the Blend pool to pull vault USDC (short-lived TTL approval stored in `BlendApprovalTtl`).
+1. Approves the Blend pool to pull vault USDC (short-lived TTL approval stored in the shared `ApprovalTtl` key).
 2. Calls `blend_pool.submit_with_allowance()` to supply USDC as a lender.
 3. Records `CurrentProtocol = "blend"`.
 
@@ -337,7 +337,7 @@ When upgrading the contract, the following storage keys must be preserved:
 - `Shares(Address)` and `Balance(Address)`
 - `TotalDeposits`, `TotalShares`, `TotalAssets`
 - `Agent`, `UsdcToken`, `Owner`, `Paused`
-- `TvLCap`, `UserDepositCap`, `BlendApprovalTtl`, `MinDeposit`, `MaxDeposit`
+- `TvLCap`, `UserDepositCap`, `ApprovalTtl`, `MinDeposit`, `MaxDeposit`
 - `BlendPool`, `CurrentProtocol`
 - `Version` (incremented)
 
