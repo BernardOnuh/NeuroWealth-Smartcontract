@@ -71,7 +71,7 @@
 //! - `Owner`: Contract owner address for administrative functions
 //! - `TvlCap`: Maximum total value locked in the vault
 //! - `UserDepositCap`: Maximum deposit per user
-//! - `BlendApprovalTtl`: Approval lifetime in ledgers for Blend supply approvals
+//! - `ApprovalTtl`: Shared approval lifetime in ledgers for Blend and DEX approvals
 //! - `Version`: Contract version for upgrade tracking
 //! - `MinRebalanceInterval`: Minimum ledgers between rebalances (owner-configurable, Issue #59)
 //! - `LastRebalanceLedger`: Ledger number of the most recent successful rebalance call (Issue #59)
@@ -314,7 +314,11 @@ pub enum DataKey {
     /// Current protocol where funds are deployed
     /// Symbol indicating the active protocol (e.g., "blend", "none")
     CurrentProtocol,
-    /// Ledger TTL used when approving Blend token spend
+    /// Legacy Blend-specific approval TTL key.
+    ///
+    /// Retained for backward compatibility with already-initialized instances.
+    /// The live approval path now reads `ApprovalTtl`, falling back to this key
+    /// when no shared TTL has been written yet.
     BlendApprovalTtl,
     /// Deployer address - the address that deployed the contract
     /// Used for signature verification during initialization to prevent front-running
@@ -327,7 +331,7 @@ pub enum DataKey {
     /// Written at the end of every successful rebalance.
     /// (Issue #59)
     LastRebalanceLedger,
-    /// Number of ledgers added to the current ledger for Blend token approvals.
+    /// Number of ledgers added to the current ledger for protocol approvals.
     ApprovalTtl,
     /// DEX liquidity pool contract address
     /// The address of the Stellar DEX liquidity pool contract used by the
@@ -878,7 +882,7 @@ const USER_SHARES_TTL_EXTEND_TO: u32 = 100;
 /// Default ledgers kept alive for Blend token approvals.
 ///
 /// The approval expiration ledger is calculated as:
-/// `current_ledger_sequence + BlendApprovalTtl`.
+    /// `current_ledger_sequence + ApprovalTtl`.
 const DEFAULT_BLEND_APPROVAL_TTL: u32 = 100_000;
 
 use topics::{
@@ -1748,9 +1752,12 @@ impl NeuroWealthVault {
         Self::require_initialized(&env);
         Self::require_not_paused(&env);
         Self::require_is_agent(&env);
-        assert!(
+        // Reuse `InvalidStrategy` for invalid rebalance configuration inputs.
+        // The contract error enum is already at Soroban's 50-variant limit.
+        Self::require(
+            &env,
             (0..=10_000).contains(&expected_apy),
-            "vault: expected_apy out of range (0-10000 bps)"
+            VaultError::InvalidStrategy,
         );
 
         // ── Rebalance cooldown guard (Issue #59) ──────────────────────────────
@@ -2986,7 +2993,7 @@ impl NeuroWealthVault {
         );
     }
 
-    /// Updates the ledger TTL used when approving Blend token spend.
+    /// Updates the shared ledger TTL used when approving protocol token spend.
     ///
     /// The approval expiration ledger is computed as:
     /// `env.ledger().sequence() + blend_approval_ttl`
@@ -2994,14 +3001,11 @@ impl NeuroWealthVault {
         Self::require_initialized(&env);
         owner.require_auth();
         let stored_owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
-        assert_eq!(
-            owner, stored_owner,
-            "vault: only owner can set blend approval ttl"
-        );
+        Self::require(&env, owner == stored_owner, VaultError::CallerIsNotOwner);
 
         env.storage()
             .instance()
-            .set(&DataKey::BlendApprovalTtl, &blend_approval_ttl);
+            .set(&DataKey::ApprovalTtl, &blend_approval_ttl);
     }
 
     // ==========================================================================
@@ -4202,13 +4206,10 @@ impl NeuroWealthVault {
         env.storage().instance().get(&DataKey::DexPool)
     }
 
-    /// Returns the ledger TTL used when approving Blend token spend.
+    /// Returns the shared ledger TTL used when approving Blend token spend.
     pub fn get_blend_approval_ttl(env: Env) -> u32 {
         Self::require_initialized(&env);
-        env.storage()
-            .instance()
-            .get(&DataKey::BlendApprovalTtl)
-            .unwrap_or(DEFAULT_BLEND_APPROVAL_TTL)
+        Self::get_approval_ttl_internal(&env)
     }
 
     /// Returns the current exchange rate: assets per share, scaled by `EXCHANGE_RATE_SCALAR`.
@@ -4517,6 +4518,7 @@ impl NeuroWealthVault {
         env.storage()
             .instance()
             .get(&DataKey::ApprovalTtl)
+            .or_else(|| env.storage().instance().get(&DataKey::BlendApprovalTtl))
             .unwrap_or(DEFAULT_APPROVAL_TTL)
     }
 
@@ -4743,7 +4745,7 @@ impl NeuroWealthVault {
     /// - Returns 0 if amount <= 0
     /// - Panics if Blend pool address is not configured
     /// - Emits BlendSupplyEvent with success status
-    /// - Uses `BlendApprovalTtl` from instance storage to set the approval expiry
+    /// - Uses the shared approval TTL configuration from instance storage to set the approval expiry
     fn supply_to_blend(env: &Env, amount: i128, min_out: i128) -> i128 {
         if amount <= 0 {
             return 0;

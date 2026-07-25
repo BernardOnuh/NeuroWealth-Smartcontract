@@ -43,6 +43,19 @@ fn test_owner_can_configure_blend_approval_ttl() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #34)")]
+fn test_non_owner_cannot_configure_blend_approval_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let attacker = Address::generate(&env);
+
+    client.set_blend_approval_ttl(&attacker, &42_u32);
+}
+
+#[test]
 fn test_blend_approval_expires_at_next_ledger_after_boundary() {
     let env = Env::default();
     env.mock_all_auths();
@@ -250,6 +263,18 @@ fn test_rebalance_apy_parameter_accepted() {
     client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
     client.rebalance(&symbol_short!("none"), &850_i128, &0_i128);
     client.rebalance(&symbol_short!("none"), &2000_i128, &0_i128);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #47)")]
+fn test_rebalance_rejects_expected_apy_above_range_with_typed_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.rebalance(&symbol_short!("none"), &10_001_i128, &0_i128);
 }
 
 #[test]
