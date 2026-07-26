@@ -257,12 +257,49 @@ pub struct CapsUpdatedEvent {
 ### 9. AgentUpdatedEvent
 **Topic:** `"agent"`
 
-Emitted when the AI agent address is updated.
+Emitted when the AI agent address is updated. Also emitted alongside `AgentUpdateConfirmedEvent` upon timelock execution for backward compatibility with legacy indexers.
 
 ```rust
 pub struct AgentUpdatedEvent {
     pub old_agent: Address,  // Previous agent address
     pub new_agent: Address,  // New agent address
+}
+```
+
+### 9a. AgentUpdateProposedEvent
+**Topic:** `"agt_prop"`
+
+Emitted when an agent update proposal is scheduled via `update_agent` — step 1 of the two-step timelocked agent update flow.
+
+```rust
+pub struct AgentUpdateProposedEvent {
+    pub old_agent: Address,       // Current active agent address
+    pub new_agent: Address,       // Proposed new agent address
+    pub effective_ledger: u32,    // Ledger at which confirm_agent_update becomes callable
+}
+```
+
+### 9b. AgentUpdateConfirmedEvent
+**Topic:** `"agt_conf"`
+
+Emitted when a pending agent update proposal is executed via `confirm_agent_update` after the timelock window has elapsed — step 2 of the timelocked flow.
+
+```rust
+pub struct AgentUpdateConfirmedEvent {
+    pub old_agent: Address,       // Previous agent address
+    pub new_agent: Address,       // New active agent address
+}
+```
+
+### 9c. AgentUpdateCancelledEvent
+**Topic:** `"agt_cncl"`
+
+Emitted when a pending proposed agent update is cancelled via `cancel_agent_update` before it is executed.
+
+```rust
+pub struct AgentUpdateCancelledEvent {
+    pub old_agent: Address,              // Active agent address (remains unchanged)
+    pub proposed_new_agent: Address,     // The proposed agent address whose update was cancelled
 }
 ```
 

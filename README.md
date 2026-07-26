@@ -85,7 +85,7 @@ NeuroWealth-Smartcontract/
 │   │       └── src/
 │   │           ├── lib.rs          # Contract logic, events, error types
 │   │           ├── topics.rs       # Exported event topic constants
-│   │           └── tests/          # Test modules (38 files)
+│   │           └── tests/          # Test modules (39 files)
 │   └── fuzz/                       # Libfuzzer fuzz targets
 │       ├── Cargo.toml
 │       └── fuzz_targets/
@@ -122,8 +122,6 @@ NeuroWealth-Smartcontract/
 ├── test/                           # Off-chain security tests
 │   ├── NotOwnerCompromiseBlastRadius.test.ts
 │   └── OwnerCompromiseBlastRadius.test.ts
-├── test_tvl_cap_stress/            # Standalone TVL-cap stress harness
-│   └── test_tvl_cap_stress.rs
 ├── .env.devnet.template
 ├── .github/
 │   ├── ISSUE_TEMPLATE/
