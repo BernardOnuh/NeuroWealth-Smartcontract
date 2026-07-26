@@ -37,6 +37,7 @@ mod test_strategy_switch_low_liquidity;
 mod test_total_assets_cap;
 mod test_ttl;
 mod test_tvl_cap_serial;
+mod test_tvl_cap_stress;
 mod test_update_total_assets_blend;
 mod test_update_total_assets_dex;
 mod test_upgrade_compatibility;

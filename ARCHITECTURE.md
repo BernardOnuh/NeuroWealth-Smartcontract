@@ -26,7 +26,7 @@ Instance storage is used for contract-wide configuration that is read frequently
 | `PendingOwner` | Address | Pending owner for two-step transfer |
 | `TvLCap` | i128 | Maximum total value locked |
 | `UserDepositCap` | i128 | Maximum deposit per user |
-| `ApprovalTtl` | u32 | Shared ledger TTL used for Blend and DEX approvals |
+| `ApprovalTtl` | u32 | Shared ledger TTL used for Blend and DEX approvals (authoritative; `BlendApprovalTtl` retained for legacy fallback) |
 | `MinDeposit` | i128 | Minimum per-transaction deposit |
 | `MaxDeposit` | i128 | Maximum per-transaction deposit |
 | `Version` | u32 | Contract version for upgrade tracking |
