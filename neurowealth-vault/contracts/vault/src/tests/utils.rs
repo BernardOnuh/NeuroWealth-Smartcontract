@@ -37,6 +37,9 @@ enum BlendMockDataKey {
     MaxSupplyLimit,
     /// Configurable max withdraw limit per transaction (0 = no limit)
     MaxWithdrawLimit,
+    /// Override the return value of submit_with_allowance without changing the
+    /// actual transferred amount. Used to test balance-delta accounting.
+    ReportedSupplyOverride,
 }
 
 #[derive(Clone)]
@@ -251,7 +254,11 @@ pub mod blend {
 
             from.clone().require_auth();
 
-            actual_amount
+            let override_amount: Option<i128> = env
+                .storage()
+                .persistent()
+                .get(&BlendMockDataKey::ReportedSupplyOverride);
+            override_amount.unwrap_or(actual_amount)
         }
 
         /// Sets a max supply limit to simulate pool shortfall scenarios.
@@ -260,6 +267,16 @@ pub mod blend {
             env.storage()
                 .persistent()
                 .set(&BlendMockDataKey::MaxSupplyLimit, &limit);
+        }
+
+        /// Makes submit_with_allowance report `reported` as the return value
+        /// regardless of how much was actually transferred. Used to test that
+        /// the vault measures outcome via balance-delta rather than trusting the
+        /// pool's return value.
+        pub fn set_reported_supply_amount(env: Env, reported: i128) {
+            env.storage()
+                .persistent()
+                .set(&BlendMockDataKey::ReportedSupplyOverride, &reported);
         }
 
         /// Sets a max withdraw limit to simulate withdrawal failures/stuck funds.
@@ -492,7 +509,8 @@ pub mod dex {
                 .persistent()
                 .get(&DexMockDataKey::Supplied(asset.clone()))
                 .unwrap_or(0);
-            let token_bal = TestTokenClient::new(&env, &asset).balance(&env.current_contract_address());
+            let token_bal =
+                TestTokenClient::new(&env, &asset).balance(&env.current_contract_address());
             core::cmp::max(supplied, token_bal)
         }
 

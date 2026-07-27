@@ -35,7 +35,9 @@ These conditions indicate abnormal behavior and require prompt investigation.
 | Cooldown violation attempt | `rebalance()` called before cooldown elapsed | Medium |
 | Share price decrease | `current_share_price < previous_share_price` | Critical |
 | `update_total_assets` reporting lower value | New value < stored TotalAssets without `allow_decrease=true` | High |
-| Vault contract upgrade | `upgrade()` called | High — requires governance sign-off |
+| Vault contract upgrade | `execute_upgrade()` called | High — requires governance sign-off |
+| Upgrade scheduled | `schedule_upgrade()` called | High — initiates 24h timelock window |
+| Agent update proposed | `update_agent()` called | High — initiates 24h timelock window |
 
 ---
 
@@ -48,12 +50,19 @@ topic; the vault emits structured events for every significant state change.
 
 | Action | Contract Function | Event Topic | Who |
 |--------|------------------|-------------|-----|
-| Pause vault | `pause()` | `pause` | Owner |
-| Unpause vault | `unpause()` | `unpause` | Owner |
-| Emergency pause | `emergency_pause()` | `emergency_pause` | Owner |
-| Set TVL cap | `set_tvl_cap()` | `set_tvl_cap` | Owner |
-| Transfer ownership | `set_owner()` | `set_owner` | Owner |
-| Upgrade contract | `upgrade()` | `upgrade` | Owner |
+| Pause vault | `pause()` | `paused` | Owner |
+| Unpause vault | `unpause()` | `unpaused` | Owner |
+| Emergency pause | `emergency_pause()` | `emerg` | Owner |
+| Set TVL cap | `set_tvl_cap()` | `tvl_cap` | Owner |
+| Initiate ownership transfer | `transfer_ownership()` | `own_init` | Owner |
+| Accept ownership | `accept_ownership()` | `own_xfer` | Pending Owner |
+| Cancel ownership transfer | `cancel_ownership_transfer()` | `own_cncl` | Owner |
+| Propose agent update | `update_agent()` | `agt_prop` | Owner |
+| Confirm agent update | `confirm_agent_update()` | `agt_conf` | Owner |
+| Cancel agent update | `cancel_agent_update()` | `agt_cncl` | Owner |
+| Schedule upgrade | `schedule_upgrade()` | `upg_sched` | Owner |
+| Execute upgrade | `execute_upgrade()` | `upgraded` | Owner |
+| Cancel upgrade | `cancel_upgrade()` | `upg_cncl` | Owner |
 
 ### Parameter Changes
 
@@ -130,16 +139,49 @@ These patterns may indicate manipulation, insider abuse, or a compromised key.
 | Pattern | Description | Response |
 |---------|-------------|----------|
 | Deposit-withdraw cycling | Multiple accounts depositing near the cap and immediately withdrawing | Investigate for fee extraction or share-price manipulation |
-| Admin address change without delay | `set_owner()` called without a governance timelock or multisig | Verify legitimacy; check for key compromise |
+| Admin address change without delay | `transfer_ownership()` / `accept_ownership()` called unexpectedly or in rapid succession | Verify legitimacy; check for owner key compromise |
 | Rapid emergency pause cycles | `emergency_pause()` / `unpause()` called multiple times within 24 h | Treat as potential exploit attempt; freeze agent authority |
 | `update_total_assets()` reporting decrease | `allow_decrease=false` but a lower value was passed (would revert) | Indicates misconfigured yield reporter or off-chain bug |
-| Unusual `upgrade()` timing | `upgrade()` called outside scheduled maintenance windows | Mandatory governance review before execution |
+| Malicious agent update or upgrade scheduled | `update_agent()` or `schedule_upgrade()` called unexpectedly | Investigate immediately; prepare to call cancel/emergency pause during the 24h timelock |
 | Agent calling non-agent functions | Agent address calling `pause()`, `set_tvl_cap()`, etc. | Key misuse; rotate agent key immediately |
 | TVL cap set to 0 | `set_tvl_cap(0)` effectively blocks all deposits | Verify intent; could be accidental denial-of-service |
 
 ---
 
-## 6. DEX-Specific Monitoring
+## 6. Timelock Monitoring (Admin Key Compromise Mitigation)
+
+To mitigate the risk of an admin key compromise, updates to the authorized AI agent (`update_agent`) and upgrades to the contract's WASM logic (`schedule_upgrade`) are protected by a mandatory 24-hour timelock (17,280 ledgers). 
+
+Operations teams must monitor on-chain events during this delay window to detect and react to unauthorized or malicious proposals before they can be executed.
+
+### Events to Watch
+
+| Event Name | Topic | Phase | Key Fields |
+|------------|-------|-------|------------|
+| `AgentUpdateProposedEvent` | `agt_prop` | Step 1: Proposal | `old_agent`, `new_agent`, `effective_ledger` |
+| `AgentUpdateConfirmedEvent` | `agt_conf` | Step 2: Execution | `old_agent`, `new_agent` |
+| `AgentUpdateCancelledEvent` | `agt_cncl` | Escape Hatch | `old_agent`, `proposed_new_agent` |
+| `UpgradeScheduledEvent` | `upg_sched` | Step 1: Proposal | `new_wasm_hash`, `effective_ledger` |
+| `UpgradedEvent` | `upgraded` | Step 2: Execution | `old_version`, `new_version` |
+| `UpgradeCancelledEvent` | `upg_cncl` | Escape Hatch | `cancelled_wasm_hash` |
+
+### Suspicious Patterns
+
+1. **Unexpected Proposals**: Any `AgentUpdateProposedEvent` or `UpgradeScheduledEvent` emitted outside of officially announced maintenance/upgrade schedules.
+2. **Rapid Succession**: A proposal immediately scheduled after a cancellation, which might indicate a struggle for control.
+3. **Execution Immediately on Expiry**: A proposal confirmed (`AgentUpdateConfirmedEvent` or `UpgradedEvent`) the exact ledger it becomes effective, especially if ownership transfer is also active.
+
+### Response Window & Actions
+
+* **Response Window**: 17,280 ledgers (approximately 24 hours).
+* **Mitigation Action (Cancellation)**: If a proposal is unauthorized or suspicious, the contract owner must immediately invoke the escape hatch:
+  * For agent updates: call `cancel_agent_update()` (emits `AgentUpdateCancelledEvent`).
+  * For contract upgrades: call `cancel_upgrade()` (emits `UpgradeCancelledEvent`).
+* **Emergency Response**: If the owner key itself is compromised, the owner (or multisig/governance wallet, if applicable) must cancel the malicious proposal, pause the vault via `emergency_pause()` or `pause()`, and prepare for key rotation.
+
+---
+
+## 7. DEX-Specific Monitoring
 
 When `CurrentProtocol == "dex"`, the following additional signals should be tracked
 alongside the routine signals in section 1.
@@ -223,7 +265,7 @@ A successful (even zero) response confirms the interface is compatible.
 
 ---
 
-## 7. Ledger-to-Time Conversion Reference
+## 8. Ledger-to-Time Conversion Reference
 
 Soroban does not expose wall-clock time natively. Use ledger sequence as a proxy.
 
@@ -238,3 +280,4 @@ Soroban does not expose wall-clock time natively. Use ledger sequence as a proxy
 These are estimates. Use `env.ledger().sequence()` for precise comparisons in
 contract code; cross-reference with Stellar Horizon for wall-clock mapping in
 off-chain monitoring.
+
