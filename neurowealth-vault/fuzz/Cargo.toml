@@ -38,7 +38,7 @@ test = false
 doc = false
 
 [[bin]]
-name = "upgrade_timelock"
-path = "fuzz_targets/upgrade_timelock.rs"
+name = "agent_update_timelock"
+path = "fuzz_targets/agent_update_timelock.rs"
 test = false
 doc = false

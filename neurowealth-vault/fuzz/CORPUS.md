@@ -39,17 +39,17 @@ This directory contains fuzz testing harnesses for the NeuroWealth Vault contrac
 4. `user_balance <= expected_balance` (proportional share)
 5. Exchange rate >= 1.0
 
-### 5. `upgrade_timelock`
-**Purpose**: Tests the upgrade timelock state machine with random schedule/execute/cancel sequences interleaved with ledger advances.
-**Input format**: 2-byte chunks where:
-- Byte 0: Operation selector (0=schedule_upgrade, 1=execute_upgrade, 2=cancel_upgrade, 3=advance ledger)
-- Byte 1: Parameter selector (hash seed or advance amount)
+### 5. `agent_update_timelock`
+**Purpose**: Exercises random propose/confirm/cancel sequences for agent updates while advancing the ledger to stress the timelock logic.
+**Input format**: 4-byte chunks where:
+- Byte 0: Operation selector (0=propose update, 1=confirm update, 2=cancel update, 3=advance ledger)
+- Bytes 1-2: Ledger/amount selector (u16 LE)
+- Byte 3: Agent selector (0-3)
 **Invariants checked**:
-1. `execute_upgrade` fails before timelock expires
-2. `execute_upgrade` succeeds after timelock expires (given pending proposal)
-3. `cancel_upgrade` always clears pending state
-4. `schedule_upgrade` fails while another proposal is pending
-5. Pending state consistency between storage and get_pending_upgrade()
+1. At most one pending agent update exists at a time
+2. Confirmation only succeeds after the timelock delay has elapsed
+3. Cancellation is always allowed while a proposal is pending
+4. Scheduled `effective_ledger` is always in the future
 
 ## Running Fuzz Tests
 
