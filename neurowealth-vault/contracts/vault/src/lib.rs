@@ -111,6 +111,21 @@
 //! vault_client.withdraw(&user, &amount);
 //! ```
 
+// `missing_docs` cannot be denied crate-wide: `#[contract]`, `#[contracttype]`,
+// and `#[contracterror]` each expand to an undocumented static and associated
+// function whose spans point at the attribute itself, so no source-level
+// `#[allow]` can annotate them. The crate-level allow below exists solely to
+// suppress that macro-generated noise — it is *not* a licence to ship
+// undocumented API:
+//
+// - `#[warn(missing_docs)]` on `impl NeuroWealthVault` (see below) re-enables
+//   the lint for every public contract entrypoint. CI runs clippy with
+//   `-D warnings`, so an undocumented `pub fn` fails the build.
+// - Every hand-written public item — event structs and their fields,
+//   `DataKey` variants, `VaultError` variants — is documented explicitly.
+//
+// Per-item `#[allow(missing_docs)]` attributes were removed in favour of this
+// single, explained crate-level allow (issues #422 / #423).
 #![allow(missing_docs)]
 #![no_std]
 #![allow(deprecated)]
@@ -138,7 +153,6 @@ const DEFAULT_TVL_CAP: i128 = 100_000_000_000;
 // ERROR TYPES
 // ============================================================================
 
-#[allow(missing_docs)]
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VaultError {
@@ -258,7 +272,6 @@ pub enum VaultError {
 /// This enum defines all keys used for both instance and persistent storage.
 /// Instance storage is used for contract-wide configuration, while persistent
 /// storage is used for per-user data that requires efficient access.
-#[allow(missing_docs)]
 #[contracttype]
 pub enum DataKey {
     /// Legacy user's principal USDC balance (key: user Address).
@@ -360,8 +373,9 @@ pub enum DataKey {
 /// yield deployment. External indexers use this for transaction tracking.
 ///
 /// # Topics
-/// - `SymbolShort("deposit")` - Event identifier
-#[allow(missing_docs)]
+/// - `0`: `SymbolShort("deposit")` (`TOPIC_DEPOSIT`) - Event identifier
+/// - `1`: `Address` - the depositing user, published as an indexed topic so
+///   indexers can filter by user without scanning payloads
 #[contracttype]
 pub struct DepositEvent {
     /// The user who made the deposit
@@ -378,8 +392,9 @@ pub struct DepositEvent {
 /// External indexers use this for transaction tracking.
 ///
 /// # Topics
-/// - `SymbolShort("withdraw")` - Event identifier
-#[allow(missing_docs)]
+/// - `0`: `SymbolShort("withdraw")` (`TOPIC_WITHDRAW`) - Event identifier
+/// - `1`: `Address` - the withdrawing user, published as an indexed topic so
+///   indexers can filter by user without scanning payloads
 #[contracttype]
 pub struct WithdrawEvent {
     /// The user who made the withdrawal
@@ -397,8 +412,7 @@ pub struct WithdrawEvent {
 /// target allocation.
 ///
 /// # Topics
-/// - `SymbolShort("rebalance")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("rebalance")` (`TOPIC_REBALANCE`) - Event identifier
 #[contracttype]
 pub struct RebalanceEvent {
     /// The target protocol (supported: "blend", "none")
@@ -423,113 +437,141 @@ pub struct RebalanceEvent {
 /// events alone.
 ///
 /// # Topics
-/// - `SymbolShort("proto_chg")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("proto_chg")` (`TOPIC_PROTOCOL_CHANGED`) - Event identifier
 #[contracttype]
 pub struct ProtocolChangedEvent {
+    /// Protocol the vault was deployed to before the change
+    /// (`"blend"`, `"dex"`, or `"none"`)
     pub old_protocol: Symbol,
+    /// Protocol the vault is deployed to after the change
+    /// (`"blend"`, `"dex"`, or `"none"`)
     pub new_protocol: Symbol,
 }
 
-/// Emitted when the vault is paused or unpaused.
+/// Combined pause/unpause payload.
+///
+/// # Reserved
+/// This struct is part of the contract type surface but is **not currently
+/// emitted**. `pause`, `unpause`, and `emergency_pause` publish the dedicated
+/// [`VaultPausedEvent`], [`VaultUnpausedEvent`], and [`EmergencyPausedEvent`]
+/// payloads instead. Indexers should not subscribe to this type.
 ///
 /// # Topics
-/// - `SymbolShort("pause")` - Event identifier
-#[allow(missing_docs)]
+/// - None (never published).
 #[contracttype]
 pub struct PauseEvent {
-    /// True if vault is now paused, false if unpaused
+    /// `true` if the vault is now paused, `false` if it is now unpaused
     pub paused: bool,
-    /// Address that triggered the pause/unpause
+    /// Address that triggered the pause/unpause transition
     pub caller: Address,
 }
 
-/// Emitted when the vault is initialized.
+/// Emitted once when the vault is initialized via `initialize`.
 ///
 /// # Topics
-/// - `SymbolShort("vault_initialized")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("init")` (`TOPIC_INIT`) - Event identifier
 #[contracttype]
 pub struct VaultInitializedEvent {
+    /// Initial owner address, authorized for every administrative entrypoint
+    /// (pause, caps, pool configuration, upgrades, ownership transfer)
     pub owner: Address,
+    /// Authorized AI agent address; the only address allowed to call
+    /// `rebalance` and `update_total_assets`
     pub agent: Address,
+    /// USDC token contract address; the only token the vault accepts
     pub usdc_token: Address,
+    /// TVL cap applied at initialization, in USDC raw units (7 decimals)
     pub tvl_cap: i128,
 }
 
-/// Emitted when initialization fails due to invalid signature.
+/// Initialization-failure payload.
+///
+/// # Reserved
+/// This struct is part of the contract type surface but is **not currently
+/// emitted**. A failed `initialize` panics with a [`VaultError`] and the
+/// transaction is reverted, so no event survives. Indexers should observe the
+/// transaction result code instead.
 ///
 /// # Topics
-/// - `SymbolShort("init_fail")` - Event identifier
-#[allow(missing_docs)]
+/// - None (never published).
 #[contracttype]
 pub struct InitFailedEvent {
+    /// Address that attempted the initialization
     pub caller: Address,
+    /// Short reason code describing why initialization was rejected
     pub reason: Symbol,
 }
 
-/// Emitted when the vault is paused.
+/// Emitted when the vault is paused via `pause`.
 ///
 /// # Topics
-/// - `SymbolShort("vault_paused")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("paused")` (`TOPIC_PAUSED`) - Event identifier
 #[contracttype]
 pub struct VaultPausedEvent {
+    /// Owner address that triggered the pause (read from storage, not the caller argument)
     pub owner: Address,
 }
 
-/// Emitted when the vault is unpaused.
+/// Emitted when the vault is unpaused via `unpause`.
 ///
 /// # Topics
-/// - `SymbolShort("vault_unpaused")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("unpaused")` (`TOPIC_UNPAUSED`) - Event identifier
 #[contracttype]
 pub struct VaultUnpausedEvent {
+    /// Owner address that triggered the unpause (read from storage, not the caller argument)
     pub owner: Address,
 }
 
-/// Emitted when the vault is emergency paused.
+/// Emitted when the vault is emergency-paused via `emergency_pause`.
+///
+/// Distinguished from [`VaultPausedEvent`] so monitoring can alert on
+/// emergency halts specifically.
 ///
 /// # Topics
-/// - `SymbolShort("emergency_paused")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("emerg")` (`TOPIC_EMERGENCY_PAUSED`) - Event identifier
 #[contracttype]
 pub struct EmergencyPausedEvent {
+    /// Owner address that triggered the emergency pause (read from storage, not the caller argument)
     pub owner: Address,
 }
 
-/// Emitted when the TVL cap is updated.
+/// Emitted when the TVL cap is updated via `set_tvl_cap`.
 ///
 /// # Topics
-/// - `SymbolShort("tvl_cap_updated")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("tvl_cap")` (`TOPIC_TVL_CAP_UPDATED`) - Event identifier
 #[contracttype]
 pub struct TvlCapUpdatedEvent {
+    /// TVL cap before the change, in USDC raw units (7 decimals)
     pub old_cap: i128,
+    /// TVL cap after the change, in USDC raw units (7 decimals)
     pub new_cap: i128,
 }
 
-/// Emitted when the per-user deposit cap is updated.
+/// Emitted when the per-user deposit cap is updated via `set_user_deposit_cap`.
 ///
 /// # Topics
-/// - `SymbolShort("user_cap_updated")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("user_cap")` (`TOPIC_USER_CAP_UPDATED`) - Event identifier
 #[contracttype]
 pub struct UserDepositCapUpdatedEvent {
+    /// Per-user deposit cap before the change, in USDC raw units (7 decimals)
     pub old_cap: i128,
+    /// Per-user deposit cap after the change, in USDC raw units (7 decimals)
     pub new_cap: i128,
 }
 
 /// Emitted when both user deposit cap and TVL cap are updated.
 ///
 /// # Topics
-/// - `SymbolShort("caps_upd")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("caps_upd")` (`TOPIC_CAPS_UPDATED`) - Event identifier
 #[contracttype]
 pub struct CapsUpdatedEvent {
+    /// Per-user deposit cap before the change, in USDC raw units (7 decimals)
     pub old_user_cap: i128,
+    /// Per-user deposit cap after the change, in USDC raw units (7 decimals)
     pub new_user_cap: i128,
+    /// TVL cap before the change, in USDC raw units (7 decimals)
     pub old_tvl_cap: i128,
+    /// TVL cap after the change, in USDC raw units (7 decimals)
     pub new_tvl_cap: i128,
 }
 
@@ -542,13 +584,16 @@ pub struct CapsUpdatedEvent {
 /// indexers that still observe the `set_limits` call path.
 ///
 /// # Topics
-/// - `SymbolShort("l_upd")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("l_upd")` (`TOPIC_LIMITS_UPDATED`) - Event identifier
 #[contracttype]
 pub struct LimitsUpdatedEvent {
+    /// Minimum per-transaction deposit before the change, in USDC raw units (7 decimals)
     pub old_min: i128,
+    /// Minimum per-transaction deposit after the change, in USDC raw units (7 decimals)
     pub new_min: i128,
+    /// Maximum per-transaction deposit before the change, in USDC raw units (7 decimals)
     pub old_max: i128,
+    /// Maximum per-transaction deposit after the change, in USDC raw units (7 decimals)
     pub new_max: i128,
 }
 
@@ -556,35 +601,43 @@ pub struct LimitsUpdatedEvent {
 /// via `set_deposit_limits`.
 ///
 /// # Topics
-/// - `SymbolShort("dep_lim")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("dep_lim")` (`TOPIC_DEPOSIT_LIMITS_UPDATED`) - Event identifier
 #[contracttype]
 pub struct DepositLimitsUpdatedEvent {
+    /// Minimum per-transaction deposit before the change, in USDC raw units (7 decimals)
     pub old_min: i128,
+    /// Minimum per-transaction deposit after the change, in USDC raw units (7 decimals)
     pub new_min: i128,
+    /// Maximum per-transaction deposit before the change, in USDC raw units (7 decimals)
     pub old_max: i128,
+    /// Maximum per-transaction deposit after the change, in USDC raw units (7 decimals)
     pub new_max: i128,
 }
 
-/// Emitted when the AI agent is updated.
+/// Emitted when the AI agent address changes.
+///
+/// Published alongside [`AgentUpdateConfirmedEvent`] by `confirm_agent_update`
+/// so legacy indexers that only track this topic keep working.
 ///
 /// # Topics
-/// - `SymbolShort("agent_updated")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("agent")` (`TOPIC_AGENT_UPDATED`) - Event identifier
 #[contracttype]
 pub struct AgentUpdatedEvent {
+    /// Agent address that was authorized before the change
     pub old_agent: Address,
+    /// Agent address authorized after the change
     pub new_agent: Address,
 }
 
 /// Emitted when an agent update is proposed via `update_agent()` (timelock step 1).
 ///
 /// # Topics
-/// - `SymbolShort("agt_prop")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("agt_prop")` (`TOPIC_AGENT_UPDATE_PROPOSED`) - Event identifier
 #[contracttype]
 pub struct AgentUpdateProposedEvent {
+    /// Agent address currently authorized; remains active for the whole timelock window
     pub old_agent: Address,
+    /// Proposed agent address, activated only by `confirm_agent_update`
     pub new_agent: Address,
     /// Ledger at which `confirm_agent_update()` becomes callable.
     pub effective_ledger: u32,
@@ -593,74 +646,86 @@ pub struct AgentUpdateProposedEvent {
 /// Emitted when a pending agent update is confirmed via `confirm_agent_update()` (timelock step 2).
 ///
 /// # Topics
-/// - `SymbolShort("agt_conf")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("agt_conf")` (`TOPIC_AGENT_UPDATE_CONFIRMED`) - Event identifier
 #[contracttype]
 pub struct AgentUpdateConfirmedEvent {
+    /// Agent address that was authorized before confirmation
     pub old_agent: Address,
+    /// Agent address now authorized to call `rebalance` and `update_total_assets`
     pub new_agent: Address,
 }
 
 /// Emitted when a pending agent update is cancelled via `cancel_agent_update()`.
 ///
 /// # Topics
-/// - `SymbolShort("agt_cncl")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("agt_cncl")` (`TOPIC_AGENT_UPDATE_CANCELLED`) - Event identifier
 #[contracttype]
 pub struct AgentUpdateCancelledEvent {
+    /// Agent address that stays authorized; cancelling never changes the active agent
     pub old_agent: Address,
+    /// Agent address that had been proposed and is now discarded
     pub proposed_new_agent: Address,
 }
 
-/// Emitted when ownership transfer is initiated.
+/// Emitted when an ownership transfer is initiated via `transfer_ownership`
+/// (step 1 of the two-step transfer).
 ///
 /// # Topics
-/// - `SymbolShort("own_init")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("own_init")` (`TOPIC_OWNERSHIP_INITIATED`) - Event identifier
 #[contracttype]
 pub struct OwnershipTransferInitiatedEvent {
+    /// Owner address that remains in control until the transfer is accepted
     pub current_owner: Address,
+    /// Proposed owner address that must call `accept_ownership` to take over
     pub pending_owner: Address,
 }
 
-/// Emitted when ownership transfer is completed.
+/// Emitted when an ownership transfer completes via `accept_ownership`
+/// (step 2 of the two-step transfer).
 ///
 /// # Topics
-/// - `SymbolShort("own_xfer")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("own_xfer")` (`TOPIC_OWNERSHIP_TRANSFERRED`) - Event identifier
 #[contracttype]
 pub struct OwnershipTransferredEvent {
+    /// Owner address that held control before the transfer
     pub old_owner: Address,
+    /// Owner address now authorized for administrative entrypoints
     pub new_owner: Address,
 }
 
-/// Emitted when ownership transfer is cancelled.
+/// Emitted when a pending ownership transfer is cancelled via
+/// `cancel_ownership_transfer`.
 ///
 /// # Topics
-/// - `SymbolShort("own_cncl")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("own_cncl")` (`TOPIC_OWNERSHIP_CANCELLED`) - Event identifier
 #[contracttype]
 pub struct OwnershipTransferCancelledEvent {
+    /// Owner address that stays in control; cancelling never changes the owner
     pub owner: Address,
+    /// Pending owner address that was discarded
     pub cancelled_pending: Address,
 }
 
-/// Emitted when total assets are updated.
+/// Emitted when the agent reports new total assets via `update_total_assets`
+/// (yield accrual or loss reporting).
+///
+/// Because share price is derived from `TotalAssets`, this event is the
+/// authoritative signal that the exchange rate has moved.
 ///
 /// # Topics
-/// - `SymbolShort("assets_updated")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("assets")` (`TOPIC_ASSETS_UPDATED`) - Event identifier
 #[contracttype]
 pub struct AssetsUpdatedEvent {
+    /// Total managed assets before the update, in USDC raw units (7 decimals)
     pub old_total: i128,
+    /// Total managed assets after the update, in USDC raw units (7 decimals)
     pub new_total: i128,
 }
 
 /// Emitted when the contract is upgraded to a new WASM implementation.
 ///
 /// # Topics
-/// - `SymbolShort("upgraded")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("upgraded")` (`TOPIC_UPGRADED`) - Event identifier
 #[contracttype]
 pub struct UpgradedEvent {
     /// The contract version before the upgrade
@@ -672,8 +737,7 @@ pub struct UpgradedEvent {
 /// Emitted when an upgrade is scheduled via `schedule_upgrade()` (timelock step 1). (#316)
 ///
 /// # Topics
-/// - `SymbolShort("upg_sched")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("upg_sched")` (`TOPIC_UPGRADE_SCHEDULED`) - Event identifier
 #[contracttype]
 pub struct UpgradeScheduledEvent {
     /// Hash of the WASM binary that will be activated once the timelock elapses.
@@ -685,8 +749,7 @@ pub struct UpgradeScheduledEvent {
 /// Emitted when a pending upgrade is cancelled via `cancel_upgrade()`. (#316)
 ///
 /// # Topics
-/// - `SymbolShort("upg_cncl")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("upg_cncl")` (`TOPIC_UPGRADE_CANCELLED`) - Event identifier
 #[contracttype]
 pub struct UpgradeCancelledEvent {
     /// Hash of the WASM binary whose pending upgrade was cancelled.
@@ -696,8 +759,7 @@ pub struct UpgradeCancelledEvent {
 /// Emitted when assets are supplied to Blend protocol.
 ///
 /// # Topics
-/// - `SymbolShort("blend_sup")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("blend_sup")` (`TOPIC_BLEND_SUPPLY`) - Event identifier
 #[contracttype]
 pub struct BlendSupplyEvent {
     /// The asset address (USDC)
@@ -711,8 +773,7 @@ pub struct BlendSupplyEvent {
 /// Emitted when assets are withdrawn from Blend protocol.
 ///
 /// # Topics
-/// - `SymbolShort("blend_wd")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("blend_wd")` (`TOPIC_BLEND_WITHDRAW`) - Event identifier
 #[contracttype]
 pub struct BlendWithdrawEvent {
     /// The asset address (USDC)
@@ -726,8 +787,7 @@ pub struct BlendWithdrawEvent {
 /// Emitted when the Blend pool address is configured.
 ///
 /// # Topics
-/// - `SymbolShort("blend_cfg")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("blend_cfg")` (`TOPIC_BLEND_POOL_CONFIGURED`) - Event identifier
 #[contracttype]
 pub struct BlendPoolConfiguredEvent {
     /// Previous Blend pool address, or None if it was not configured
@@ -741,8 +801,7 @@ pub struct BlendPoolConfiguredEvent {
 /// Emitted when assets are supplied to a DEX liquidity pool.
 ///
 /// # Topics
-/// - `SymbolShort("dex_sup")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("dex_sup")` (`TOPIC_DEX_SUPPLY`) - Event identifier
 #[contracttype]
 pub struct DexSupplyEvent {
     /// The asset address (USDC)
@@ -756,8 +815,7 @@ pub struct DexSupplyEvent {
 /// Emitted when assets are withdrawn from a DEX liquidity pool.
 ///
 /// # Topics
-/// - `SymbolShort("dex_wd")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("dex_wd")` (`TOPIC_DEX_WITHDRAW`) - Event identifier
 #[contracttype]
 pub struct DexWithdrawEvent {
     /// The asset address (USDC)
@@ -771,8 +829,7 @@ pub struct DexWithdrawEvent {
 /// Emitted when the DEX pool address is configured.
 ///
 /// # Topics
-/// - `SymbolShort("dex_cfg")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("dex_cfg")` (`TOPIC_DEX_POOL_CONFIGURED`) - Event identifier
 #[contracttype]
 pub struct DexPoolConfiguredEvent {
     /// Previous DEX pool address, or None if it was not configured
@@ -789,8 +846,7 @@ pub struct DexPoolConfiguredEvent {
 /// reverting the transaction. State remains unchanged when this event fires.
 ///
 /// # Topics
-/// - `SymbolShort("reb_fail")` - Event identifier
-#[allow(missing_docs)]
+/// - `SymbolShort("reb_fail")` (`TOPIC_REBALANCE_FAILED`) - Event identifier
 #[contracttype]
 pub struct RebalanceFailedEvent {
     /// The protocol the vault was trying to exit
@@ -804,8 +860,9 @@ pub struct RebalanceFailedEvent {
 /// AI agents read this event to adjust yield deployment per user.
 ///
 /// # Topics
-/// - `SymbolShort("usr_strat")` - Event identifier
-#[allow(missing_docs)]
+/// - `0`: `SymbolShort("usr_strat")` (`TOPIC_USER_STRATEGY_UPDATED`) - Event identifier
+/// - `1`: `Address` - the user whose strategy changed, published as an indexed
+///   topic so agents can subscribe per user
 #[contracttype]
 pub struct UserStrategyUpdatedEvent {
     /// The user who updated their strategy
@@ -816,7 +873,10 @@ pub struct UserStrategyUpdatedEvent {
     pub new_strategy: Symbol,
 }
 
-#[allow(missing_docs)]
+/// Aggregate view of a single user's position, returned by
+/// [`NeuroWealthVault::get_user_info`].
+///
+/// This is a return type, not an event: it is never published to the event log.
 #[contracttype]
 pub struct UserInfo {
     /// Deprecated compatibility field.
@@ -825,6 +885,9 @@ pub struct UserInfo {
     /// stored principal record. Use `shares` plus share conversion helpers when
     /// exact accounting provenance matters.
     pub principal: i128,
+    /// The user's vault share balance, representing proportional ownership of
+    /// `TotalAssets`. Convert to USDC with
+    /// [`NeuroWealthVault::convert_to_assets`].
     pub shares: i128,
 }
 
@@ -844,7 +907,6 @@ pub struct UserInfo {
 struct BlendPoolClient;
 
 #[derive(Clone)]
-#[allow(missing_docs)]
 #[contracttype]
 struct BlendRequest {
     request_type: u32,
@@ -1130,11 +1192,14 @@ impl DexPoolClient {
 /// # Upgradeability
 ///
 /// This contract can be upgraded by the owner while preserving all storage state.
-#[allow(missing_docs)]
 #[contract]
 pub struct NeuroWealthVault;
 
 #[contractimpl]
+// Re-enables `missing_docs` for the contract's public entrypoints, which the
+// crate-level allow would otherwise silence. Keep this attribute: it is what
+// makes an undocumented `pub fn` fail CI (`clippy -D warnings`).
+#[warn(missing_docs)]
 impl NeuroWealthVault {
     #[inline]
     fn require(env: &Env, condition: bool, error: VaultError) {
@@ -2453,15 +2518,37 @@ impl NeuroWealthVault {
     ///
     /// # Events
     ///
-    /// - `BlendPoolConfiguredEvent`
+    /// None. The cooldown is configuration-only; read the effective value back
+    /// with [`get_rebalance_cooldown`](crate::NeuroWealthVault::get_rebalance_cooldown).
     ///
     /// # Errors
     ///
-    /// None.
+    /// None. Failures panic rather than returning a `Result`.
     ///
     /// # Panics
     ///
-    /// - If the caller is not the owner.
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    /// - [`VaultError::CallerIsNotOwner`] if the caller is not the stored owner.
+    ///
+    /// # Storage
+    ///
+    /// Writes [`DataKey::MinRebalanceInterval`] in instance storage, or removes
+    /// the key entirely when `interval == 0`. `rebalance` compares
+    /// [`DataKey::LastRebalanceLedger`] against this value and panics with
+    /// [`VaultError::RebalanceCooldownActive`] while the window is open.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Throttle the agent to roughly one rebalance per hour
+    /// // (720 ledgers x ~5 s per ledger = 3,600 s).
+    /// vault_client.set_rebalance_cooldown(&720);
+    /// assert_eq!(vault_client.get_rebalance_cooldown(), 720);
+    ///
+    /// // Disable the throttle again.
+    /// vault_client.set_rebalance_cooldown(&0);
+    /// assert_eq!(vault_client.get_rebalance_cooldown(), 0);
+    /// ```
     pub fn set_rebalance_cooldown(env: Env, interval: u32) {
         Self::require_initialized(&env);
         Self::require_is_owner(&env);
@@ -2486,6 +2573,14 @@ impl NeuroWealthVault {
     ///
     /// # Returns
     /// The minimum ledgers between rebalances, or `0` when disabled.
+    ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Panics
+    ///
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
     pub fn get_rebalance_cooldown(env: Env) -> u32 {
         Self::require_initialized(&env);
         env.storage()
@@ -2502,6 +2597,14 @@ impl NeuroWealthVault {
     ///
     /// # Returns
     /// The ledger of the last rebalance, or `0`.
+    ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Panics
+    ///
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
     pub fn get_last_rebalance_ledger(env: Env) -> u32 {
         Self::require_initialized(&env);
         env.storage()
@@ -2510,22 +2613,54 @@ impl NeuroWealthVault {
             .unwrap_or(0)
     }
 
-    /// Sets the number of ledgers that Blend token approvals remain valid.
+    /// Sets the shared lifetime, in ledgers, of the token approvals the vault
+    /// grants to external protocols.
     ///
-    /// Only the owner can call this function. The TTL is bounded to prevent
-    /// approvals from expiring too quickly or remaining valid for too long.
+    /// The TTL applies to **both** the Blend and DEX integrations: before each
+    /// supply leg the vault approves the pool to spend USDC until
+    /// `current_ledger + ttl`. A short TTL limits the blast radius of a
+    /// compromised pool; a long TTL avoids re-approving on every rebalance.
+    ///
+    /// Only the owner can call this function. The value is clamped to
+    /// `[1_000, 500_000]` ledgers (roughly 1.4 to 29 days at ~5 s per ledger).
     ///
     /// # Arguments
+    ///
     /// * `env` - The Soroban environment.
-    /// * `ttl` - Number of ledgers to add to the current ledger for approvals.
+    /// * `ttl` - Number of ledgers added to the current ledger when approving.
     ///
     /// # Returns
+    ///
     /// None.
     ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Errors
+    ///
+    /// None. Failures panic rather than returning a `Result`.
+    ///
     /// # Panics
-    /// - If the caller is not the owner.
-    /// - If `ttl` is below 1,000 ledgers.
-    /// - If `ttl` is above 500,000 ledgers.
+    ///
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    /// - [`VaultError::CallerIsNotOwner`] if the caller is not the stored owner.
+    /// - [`VaultError::ApprovalTtlTooLow`] if `ttl < 1_000`.
+    /// - [`VaultError::ApprovalTtlTooHigh`] if `ttl > 500_000`.
+    ///
+    /// # Storage
+    ///
+    /// Writes [`DataKey::ApprovalTtl`]. The legacy
+    /// [`DataKey::BlendApprovalTtl`] key is only read as a fallback for vaults
+    /// initialized before the shared TTL existed, and is never written here.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Shorten approvals to ~1 day (17,280 ledgers x ~5 s).
+    /// vault_client.set_approval_ttl(&17_280);
+    /// assert_eq!(vault_client.get_approval_ttl(), 17_280);
+    /// ```
     pub fn set_approval_ttl(env: Env, ttl: u32) {
         Self::require_initialized(&env);
         Self::require_is_owner(&env);
@@ -2540,13 +2675,32 @@ impl NeuroWealthVault {
         env.storage().instance().set(&DataKey::ApprovalTtl, &ttl);
     }
 
-    /// Returns the configured Blend approval TTL, or the default if unset.
+    /// Returns the shared protocol approval TTL in ledgers.
+    ///
+    /// Resolution order: [`DataKey::ApprovalTtl`], then the legacy
+    /// [`DataKey::BlendApprovalTtl`] for vaults initialized before the shared
+    /// key existed, then the `100_000`-ledger default (~5.7 days).
     ///
     /// # Arguments
+    ///
     /// * `env` - The Soroban environment.
     ///
     /// # Returns
-    /// Number of ledgers added to the current ledger for Blend token approvals.
+    ///
+    /// Number of ledgers added to the current ledger when approving Blend or
+    /// DEX pools to spend the vault's USDC.
+    ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    ///
+    /// # Panics
+    ///
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
     pub fn get_approval_ttl(env: Env) -> u32 {
         Self::require_initialized(&env);
         Self::get_approval_ttl_internal(&env)
@@ -2614,27 +2768,57 @@ impl NeuroWealthVault {
     // USER STRATEGY PREFERENCE
     // ==========================================================================
 
-    /// Sets the user's investment strategy preference.
+    /// Sets the caller's investment strategy preference.
     ///
-    /// Only the user themselves can set their own strategy (requires auth).
-    /// The strategy is stored on-chain for the AI agent to read.
+    /// Only the user themselves can set their own strategy (`require_auth`);
+    /// neither the owner nor the agent can set it on their behalf. The
+    /// preference is advisory: it is stored on-chain for the AI agent to read
+    /// when choosing where to deploy funds, and does not by itself move any
+    /// assets or restrict which protocol `rebalance` may target.
+    ///
+    /// Setting the same strategy twice is allowed and re-emits the event with
+    /// `old_strategy == new_strategy`.
     ///
     /// # Arguments
     ///
     /// * `env` - The Soroban environment.
-    /// * `user` - The user address (must authorize).
-    /// * `strategy` - The strategy symbol: "conservative", "balanced", or "growth".
+    /// * `user` - The user address; must authorize the call.
+    /// * `strategy` - One of `"conservative"`, `"balanced"`, or `"growth"`.
+    ///
+    /// # Returns
+    ///
+    /// None.
     ///
     /// # Events
     ///
-    /// Emits:
-    /// - `UserStrategyUpdatedEvent`
+    /// Emits [`UserStrategyUpdatedEvent`] with topics
+    /// `("usr_strat", user)`. `old_strategy` is the empty symbol `""` the first
+    /// time a user sets a preference.
+    ///
+    /// # Errors
+    ///
+    /// None. Failures panic rather than returning a `Result`.
     ///
     /// # Panics
     ///
-    /// - If the vault is not initialized.
-    /// - If the user does not authorize.
-    /// - If the strategy is not one of the valid options.
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    /// - If `user` does not authorize the call.
+    /// - [`VaultError::InvalidStrategy`] if `strategy` is not one of the three
+    ///   accepted symbols.
+    ///
+    /// # Storage
+    ///
+    /// Writes [`DataKey::UserStrategy`] in persistent storage, keyed by `user`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// vault_client.set_user_strategy(&user, &Symbol::new(&env, "growth"));
+    /// assert_eq!(
+    ///     vault_client.get_user_strategy(&user),
+    ///     Symbol::new(&env, "growth"),
+    /// );
+    /// ```
     pub fn set_user_strategy(env: Env, user: Address, strategy: Symbol) {
         Self::require_initialized(&env);
         user.require_auth();
@@ -2665,9 +2849,12 @@ impl NeuroWealthVault {
         );
     }
 
-    /// Returns the user's investment strategy preference.
+    /// Returns a user's investment strategy preference.
     ///
-    /// If the user has not set a strategy, returns the default ("balanced").
+    /// Read-only and unauthenticated: any caller may query any address. Users
+    /// who have never called [`set_user_strategy`](crate::NeuroWealthVault::set_user_strategy) are reported as
+    /// `"balanced"`, so callers cannot distinguish "never set" from
+    /// "explicitly set to balanced" through this function alone.
     ///
     /// # Arguments
     ///
@@ -2676,7 +2863,30 @@ impl NeuroWealthVault {
     ///
     /// # Returns
     ///
-    /// The strategy symbol ("conservative", "balanced", or "growth").
+    /// The strategy symbol: `"conservative"`, `"balanced"`, or `"growth"`.
+    /// Defaults to `"balanced"` when unset.
+    ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    ///
+    /// # Panics
+    ///
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // A user who has never expressed a preference reads back as "balanced".
+    /// assert_eq!(
+    ///     vault_client.get_user_strategy(&fresh_user),
+    ///     Symbol::new(&env, "balanced"),
+    /// );
+    /// ```
     pub fn get_user_strategy(env: Env, user: Address) -> Symbol {
         Self::require_initialized(&env);
         env.storage()
@@ -2849,7 +3059,59 @@ impl NeuroWealthVault {
         );
     }
 
-    /// Returns the pending agent address and effective ledger, if a proposal is active. (#317)
+    /// Returns the pending agent proposal, if one is active. (#317)
+    ///
+    /// Lets operators and indexers observe a proposed agent change during the
+    /// 24-hour timelock window opened by [`update_agent`](crate::NeuroWealthVault::update_agent), and decide
+    /// whether to let it proceed or call [`cancel_agent_update`](crate::NeuroWealthVault::cancel_agent_update).
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    ///
+    /// # Returns
+    ///
+    /// * `Some((new_agent, effective_ledger))` while a proposal is pending,
+    ///   where `effective_ledger` is the first ledger at which
+    ///   [`confirm_agent_update`](crate::NeuroWealthVault::confirm_agent_update) may be called.
+    /// * `None` when no proposal is pending — either none was made, or it was
+    ///   already confirmed or cancelled.
+    ///
+    /// Compare `effective_ledger` against `env.ledger().sequence()` to tell a
+    /// still-waiting proposal from a ready-to-confirm one. The currently active
+    /// agent is unchanged until confirmation; read it with [`get_agent`](crate::NeuroWealthVault::get_agent).
+    ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    ///
+    /// # Panics
+    ///
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    ///
+    /// # Storage
+    ///
+    /// Reads [`DataKey::PendingAgent`] and [`DataKey::AgentTimelockExpiry`].
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// match vault_client.get_pending_agent_update() {
+    ///     None => { /* no agent change in flight */ }
+    ///     Some((new_agent, effective_ledger)) => {
+    ///         if env.ledger().sequence() >= effective_ledger {
+    ///             vault_client.confirm_agent_update();
+    ///         } else {
+    ///             // Still inside the timelock window; cancel if unexpected.
+    ///             let _ = new_agent;
+    ///         }
+    ///     }
+    /// }
+    /// ```
     pub fn get_pending_agent_update(env: Env) -> Option<(Address, u32)> {
         Self::require_initialized(&env);
         let pending: Option<Address> = env.storage().instance().get(&DataKey::PendingAgent);
@@ -2933,7 +3195,7 @@ impl NeuroWealthVault {
 
     /// Configures the DEX liquidity pool contract address (owner only).
     ///
-    /// Mirrors [`Self::set_blend_pool`]. The pool interface is validated by probing
+    /// Mirrors [`set_blend_pool`](crate::NeuroWealthVault::set_blend_pool). The pool interface is validated by probing
     /// its `balance` entrypoint before the address is stored, so an invalid pool
     /// address is rejected at configuration time. `CurrentProtocol` is initialized
     /// to `"none"` when not already set.
@@ -3539,8 +3801,61 @@ impl NeuroWealthVault {
         );
     }
 
-    /// Returns the pending upgrade WASM hash and effective ledger, if a proposal
-    /// is active. (#316)
+    /// Returns the pending upgrade proposal, if one is active. (#316)
+    ///
+    /// This is the public monitoring hook for the two-step timelocked upgrade.
+    /// Users and watchtowers should poll it (or subscribe to
+    /// [`UpgradeScheduledEvent`]) to learn about a scheduled code change while
+    /// there is still time to exit the vault or for the owner to call
+    /// [`cancel_upgrade`](crate::NeuroWealthVault::cancel_upgrade).
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    ///
+    /// # Returns
+    ///
+    /// * `Some((new_wasm_hash, effective_ledger))` while an upgrade is pending,
+    ///   where `new_wasm_hash` is the WASM that [`execute_upgrade`](crate::NeuroWealthVault::execute_upgrade) will
+    ///   activate and `effective_ledger` is the first ledger at which it may be
+    ///   executed.
+    /// * `None` when no upgrade is pending — either none was scheduled, or it
+    ///   was already executed or cancelled.
+    ///
+    /// A `Some(..)` result does **not** mean the contract code has changed; the
+    /// running code is only replaced by [`execute_upgrade`](crate::NeuroWealthVault::execute_upgrade). Compare the
+    /// returned hash against the WASM you expect before allowing the timelock
+    /// to elapse.
+    ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Errors
+    ///
+    /// None.
+    ///
+    /// # Panics
+    ///
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    ///
+    /// # Storage
+    ///
+    /// Reads [`DataKey::PendingUpgradeHash`] and
+    /// [`DataKey::UpgradeTimelockExpiry`].
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// if let Some((wasm_hash, effective_ledger)) = vault_client.get_pending_upgrade() {
+    ///     let ledgers_remaining = effective_ledger.saturating_sub(env.ledger().sequence());
+    ///     if wasm_hash != expected_wasm_hash {
+    ///         // Unexpected code scheduled - cancel within the timelock window.
+    ///         vault_client.cancel_upgrade(&owner);
+    ///     }
+    ///     let _ = ledgers_remaining;
+    /// }
+    /// ```
     pub fn get_pending_upgrade(env: Env) -> Option<(BytesN<32>, u32)> {
         Self::require_initialized(&env);
         let pending: Option<BytesN<32>> =
@@ -3801,7 +4116,25 @@ impl NeuroWealthVault {
     ///
     /// # Panics
     ///
-    /// None.
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    ///
+    /// # Storage
+    ///
+    /// Extends the TTL of [`DataKey::Shares`] in persistent storage when the
+    /// entry exists. Never creates an entry, so calling this for an address
+    /// that has never deposited is a cheap no-op returning `false`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Keeper job: refresh every tracked holder, skipping addresses that
+    /// // hold no shares.
+    /// for user in tracked_users {
+    ///     if !vault_client.touch_user_ttl(&user) {
+    ///         // No Shares entry - drop the address from the keeper set.
+    ///     }
+    /// }
+    /// ```
     pub fn touch_user_ttl(env: Env, user: Address) -> bool {
         Self::require_initialized(&env);
         if !env
@@ -3845,16 +4178,27 @@ impl NeuroWealthVault {
         UserInfo { principal, shares }
     }
 
-    /// Previews the number of shares that would be minted for a given asset deposit.
+    /// Previews the number of shares that would be minted for a given deposit.
+    ///
+    /// Uses **floor** rounding, matching `deposit`: the caller may receive
+    /// fractionally fewer shares than exact division would give, and the
+    /// remainder accrues to the vault. This is the ERC-4626 convention.
+    ///
+    /// Read-only, but the preview is only valid for the current ledger state —
+    /// a deposit, withdrawal, or `update_total_assets` landing in between can
+    /// move the share price. Frontends should re-read immediately before
+    /// submitting.
     ///
     /// # Arguments
     ///
     /// * `env` - The Soroban environment.
-    /// * `assets` - The amount of USDC to deposit (7 decimal places).
+    /// * `assets` - The amount of USDC to deposit, in raw units (7 decimals).
     ///
     /// # Returns
     ///
-    /// Returns the number of shares that would be minted.
+    /// The number of shares that would be minted:
+    /// `floor(assets * total_shares / total_assets)`, or `assets` in the
+    /// bootstrap case where `total_shares == 0` or `total_assets == 0`.
     ///
     /// # Events
     ///
@@ -3866,22 +4210,36 @@ impl NeuroWealthVault {
     ///
     /// # Panics
     ///
-    /// None.
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    /// - If the intermediate `assets * total_shares` product overflows `i128`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Vault holding 1,100 USDC against 1,000 shares (10% yield accrued).
+    /// // Depositing 110 USDC mints ~100 shares.
+    /// let shares = vault_client.preview_deposit_to_shares(&1_100_000_000);
+    /// ```
     pub fn preview_deposit_to_shares(env: Env, assets: i128) -> i128 {
         Self::require_initialized(&env);
         Self::convert_to_shares_internal(&env, assets)
     }
 
-    /// Previews the number of assets that a given number of shares is worth.
+    /// Previews the USDC value of a given number of shares.
+    ///
+    /// Uses **floor** rounding, matching the redemption path. Use this to show
+    /// a holder's current position value; use [`preview_withdraw`](crate::NeuroWealthVault::preview_withdraw) to
+    /// show how many shares a *target withdrawal amount* would burn.
     ///
     /// # Arguments
     ///
     /// * `env` - The Soroban environment.
-    /// * `shares` - The number of shares.
+    /// * `shares` - The number of vault shares to value.
     ///
     /// # Returns
     ///
-    /// Returns the asset value of the shares (7 decimal places).
+    /// `floor(shares * total_assets / total_shares)` in USDC raw units
+    /// (7 decimals), or `0` when the vault holds no shares or no assets.
     ///
     /// # Events
     ///
@@ -3893,7 +4251,16 @@ impl NeuroWealthVault {
     ///
     /// # Panics
     ///
-    /// None.
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    /// - If the intermediate `shares * total_assets` product overflows `i128`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Display a user's position in USDC.
+    /// let shares = vault_client.get_shares(&user);
+    /// let value = vault_client.preview_shares_to_assets(&shares);
+    /// ```
     pub fn preview_shares_to_assets(env: Env, shares: i128) -> i128 {
         Self::require_initialized(&env);
         Self::convert_to_assets_internal(&env, shares)
@@ -3917,7 +4284,9 @@ impl NeuroWealthVault {
     ///
     /// # Returns
     ///
-    /// Returns the number of shares that would be burned.
+    /// The number of shares that would be burned:
+    /// `ceil(assets * total_shares / total_assets)`. Always at least `1` when
+    /// `assets > 0`, which is what makes dust withdrawals non-free.
     ///
     /// # Events
     ///
@@ -3929,23 +4298,42 @@ impl NeuroWealthVault {
     ///
     /// # Panics
     ///
-    /// None.
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    /// - If the intermediate `assets * total_shares` product overflows `i128`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Show the user the share cost of a withdrawal before they confirm.
+    /// let shares_burned = vault_client.preview_withdraw(&amount);
+    /// assert!(shares_burned <= vault_client.get_shares(&user));
+    ///
+    /// // Ceil burn: preview_withdraw is never smaller than the floor-rounded
+    /// // conversion of the same amount.
+    /// assert!(shares_burned >= vault_client.convert_to_shares(&amount));
+    /// ```
     pub fn preview_withdraw(env: Env, assets: i128) -> i128 {
         Self::require_initialized(&env);
         Self::convert_to_shares_internal_ceil(&env, assets)
     }
 
-    /// Converts an asset amount (USDC) to the corresponding number of shares,
-    /// using the current share price.
+    /// Converts a USDC amount to shares at the current share price.
+    ///
+    /// The ERC-4626 `convertToShares` equivalent: an idealised, fee-free
+    /// conversion for accounting and display. It is identical to
+    /// [`preview_deposit_to_shares`](crate::NeuroWealthVault::preview_deposit_to_shares) in this vault because deposits carry
+    /// no fee, and both round **down**. When previewing a *withdrawal*, use
+    /// [`preview_withdraw`](crate::NeuroWealthVault::preview_withdraw) instead — that path rounds up.
     ///
     /// # Arguments
     ///
     /// * `env` - The Soroban environment.
-    /// * `assets` - The asset amount.
+    /// * `assets` - The USDC amount in raw units (7 decimals).
     ///
     /// # Returns
     ///
-    /// Returns the number of shares.
+    /// `floor(assets * total_shares / total_assets)`, or `assets` in the
+    /// bootstrap case where `total_shares == 0` or `total_assets == 0`.
     ///
     /// # Events
     ///
@@ -3957,23 +4345,35 @@ impl NeuroWealthVault {
     ///
     /// # Panics
     ///
-    /// None.
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    /// - If the intermediate `assets * total_shares` product overflows `i128`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Round-tripping is lossy in the vault's favour, never the user's.
+    /// let shares = vault_client.convert_to_shares(&assets);
+    /// assert!(vault_client.convert_to_assets(&shares) <= assets);
+    /// ```
     pub fn convert_to_shares(env: Env, assets: i128) -> i128 {
         Self::require_initialized(&env);
         Self::convert_to_shares_internal(&env, assets)
     }
 
-    /// Converts a share amount to the corresponding asset amount (USDC),
-    /// using the current share price.
+    /// Converts a share amount to USDC at the current share price.
+    ///
+    /// The ERC-4626 `convertToAssets` equivalent, identical to
+    /// [`preview_shares_to_assets`](crate::NeuroWealthVault::preview_shares_to_assets) in this vault. Rounds **down**.
     ///
     /// # Arguments
     ///
     /// * `env` - The Soroban environment.
-    /// * `shares` - The number of shares.
+    /// * `shares` - The number of vault shares.
     ///
     /// # Returns
     ///
-    /// Returns the asset amount.
+    /// `floor(shares * total_assets / total_shares)` in USDC raw units
+    /// (7 decimals), or `0` when the vault holds no shares or no assets.
     ///
     /// # Events
     ///
@@ -3985,7 +4385,16 @@ impl NeuroWealthVault {
     ///
     /// # Panics
     ///
-    /// None.
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    /// - If the intermediate `shares * total_assets` product overflows `i128`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Value the whole supply: equals total_assets up to floor rounding.
+    /// let all = vault_client.convert_to_assets(&vault_client.get_total_shares());
+    /// assert!(all <= vault_client.get_total_assets());
+    /// ```
     pub fn convert_to_assets(env: Env, shares: i128) -> i128 {
         Self::require_initialized(&env);
         Self::convert_to_assets_internal(&env, shares)
@@ -4306,7 +4715,12 @@ impl NeuroWealthVault {
     ///
     /// # Returns
     ///
-    /// Returns the idle USDC balance in raw units (7 decimal places).
+    /// The idle USDC balance in raw units (7 decimals), read live from the USDC
+    /// token contract.
+    ///
+    /// This is the token balance, not an accounting figure: it is not the same
+    /// as `get_total_assets() - get_deployed_assets()`, and it is the amount a
+    /// withdrawal can be served from without exiting a protocol position.
     ///
     /// # Events
     ///
@@ -4318,7 +4732,15 @@ impl NeuroWealthVault {
     ///
     /// # Panics
     ///
-    /// None.
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    /// - If the USDC token contract traps on the `balance` call.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Can this withdrawal be served without touching the protocol position?
+    /// let instant = vault_client.get_idle_balance() >= amount;
+    /// ```
     pub fn get_idle_balance(env: Env) -> i128 {
         Self::require_initialized(&env);
         let usdc: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
@@ -4338,8 +4760,13 @@ impl NeuroWealthVault {
     ///
     /// # Returns
     ///
-    /// Returns the deployed USDC amount in raw units (7 decimal places), or `0`
-    /// when no funds are deployed.
+    /// The deployed USDC amount in raw units (7 decimals), queried live from
+    /// the active protocol's `balance` entrypoint.
+    ///
+    /// Returns `0` when [`DataKey::CurrentProtocol`] is `"none"`, when it names
+    /// a protocol the vault does not integrate, or when the matching pool
+    /// address ([`DataKey::BlendPool`] / [`DataKey::DexPool`]) is unset — an
+    /// unconfigured pool reads as zero rather than panicking.
     ///
     /// # Events
     ///
@@ -4351,7 +4778,19 @@ impl NeuroWealthVault {
     ///
     /// # Panics
     ///
-    /// None.
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    /// - If the configured pool contract traps on the cross-contract `balance`
+    ///   call. Because this is a cross-contract read, the call also costs more
+    ///   than a plain storage getter.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Yield to date, ignoring rounding, once funds are deployed.
+    /// let deployed = vault_client.get_deployed_assets();
+    /// let idle = vault_client.get_idle_balance();
+    /// let unreported = (idle + deployed) - vault_client.get_total_assets();
+    /// ```
     pub fn get_deployed_assets(env: Env) -> i128 {
         Self::require_initialized(&env);
         let protocol: Symbol = env
@@ -4364,7 +4803,7 @@ impl NeuroWealthVault {
 
     /// Returns the vault's asset breakdown as `(idle, deployed)`.
     ///
-    /// Combines [`Self::get_idle_balance`] and [`Self::get_deployed_assets`] into
+    /// Combines [`get_idle_balance`](crate::NeuroWealthVault::get_idle_balance) and [`get_deployed_assets`](crate::NeuroWealthVault::get_deployed_assets) into
     /// a single call for convenience. Useful for dashboards and AI agents that need
     /// both values atomically in one RPC round-trip.
     ///
@@ -4377,8 +4816,14 @@ impl NeuroWealthVault {
     ///
     /// # Returns
     ///
-    /// Returns `(idle, deployed)` where both values are in raw USDC units
-    /// (7 decimal places).
+    /// `(idle, deployed)`, both in USDC raw units (7 decimals). The two values
+    /// are read within one invocation, so they are consistent with each other —
+    /// unlike calling the two getters separately, which can straddle a
+    /// rebalance.
+    ///
+    /// Their sum is the vault's economic position and need not equal
+    /// [`get_total_assets`](crate::NeuroWealthVault::get_total_assets), which only moves when the agent reports it
+    /// via `update_total_assets`. A persistent gap means unreported yield.
     ///
     /// # Events
     ///
@@ -4390,7 +4835,20 @@ impl NeuroWealthVault {
     ///
     /// # Panics
     ///
-    /// None.
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    /// - If the USDC token or the configured pool contract traps on its
+    ///   `balance` call.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let (idle, deployed) = vault_client.get_asset_breakdown();
+    /// let deployed_pct = if idle + deployed == 0 {
+    ///     0
+    /// } else {
+    ///     deployed * 100 / (idle + deployed)
+    /// };
+    /// ```
     pub fn get_asset_breakdown(env: Env) -> (i128, i128) {
         Self::require_initialized(&env);
         let usdc: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
@@ -4608,13 +5066,13 @@ impl NeuroWealthVault {
     /// Uses floor division - safe for deposits (user gets fewer shares, vault benefits).
     ///
     /// # Inflation-attack note
-    /// Pricing reads the stored `TotalAssets` (see [`Self::get_total_assets_internal`]),
+    /// Pricing reads the stored `TotalAssets` (see [`get_total_assets_internal`](crate::NeuroWealthVault::get_total_assets_internal)),
     /// NOT the vault's live token balance. Direct "donations" (token transfers to
     /// the vault that bypass `deposit`) therefore do not move the share price, so
     /// the classic first-depositor/donation inflation attack does not apply here.
     /// Virtual-share / dead-share offsets (common mitigations for balance-based
     /// vaults) are unnecessary as a result. The `deposit` entrypoint additionally
-    /// rejects zero-share mints and enforces a minimum deposit; see [`Self::deposit`]
+    /// rejects zero-share mints and enforces a minimum deposit; see [`deposit`](crate::NeuroWealthVault::deposit)
     /// for the full mitigation rationale.
     #[inline]
     fn convert_to_shares_internal(env: &Env, assets: i128) -> i128 {
@@ -4927,10 +5385,10 @@ impl NeuroWealthVault {
 
     /// Internal helper: Supplies USDC to the DEX liquidity pool.
     ///
-    /// Mirrors [`Self::supply_to_blend`]: approves the pool to pull USDC, authorizes
+    /// Mirrors [`supply_to_blend`](crate::NeuroWealthVault::supply_to_blend): approves the pool to pull USDC, authorizes
     /// the cross-contract `add_liquidity` call (with its `transfer_from`
     /// sub-invocation), then supplies. The `min_out` floor is enforced both by
-    /// forwarding it to the pool and by [`Self::require_min_out`] on the realized
+    /// forwarding it to the pool and by [`require_min_out`](crate::NeuroWealthVault::require_min_out) on the realized
     /// amount, giving slippage protection on the DEX leg.
     ///
     /// # Arguments
@@ -5052,7 +5510,7 @@ impl NeuroWealthVault {
 
     /// Internal helper: Withdraws USDC from the DEX liquidity pool.
     ///
-    /// Mirrors [`Self::withdraw_from_blend`]. When `amount == 0` the full deployed
+    /// Mirrors [`withdraw_from_blend`](crate::NeuroWealthVault::withdraw_from_blend). When `amount == 0` the full deployed
     /// position is withdrawn.
     ///
     /// # Arguments
@@ -5148,7 +5606,7 @@ impl NeuroWealthVault {
     /// Internal helper: Withdraws a specific `amount` from the active protocol.
     ///
     /// Used by user-facing `withdraw`/`withdraw_all` to pull only the liquidity
-    /// needed to satisfy a redemption (as opposed to [`Self::withdraw_from_protocol`],
+    /// needed to satisfy a redemption (as opposed to [`withdraw_from_protocol`](crate::NeuroWealthVault::withdraw_from_protocol),
     /// which exits the full position). Dispatches to the protocol-specific helper.
     ///
     /// # Returns

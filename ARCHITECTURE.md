@@ -19,8 +19,9 @@ Instance storage is used for contract-wide configuration that is read frequently
 | `TotalDeposits` | i128 | Total USDC principal deposited (excluding yield) |
 | `TotalShares` | i128 | Total vault shares in circulation |
 | `TotalAssets` | i128 | Total managed assets (principal + yield) |
-| `CurrentProtocol`| Symbol | Active protocol symbol ("blend", "none") |
+| `CurrentProtocol`| Symbol | Active protocol symbol ("blend", "dex", "none") |
 | `BlendPool` | Address | Blend pool contract address |
+| `DexPool` | Address | DEX liquidity pool contract address (Issue #228) |
 | `Paused` | bool | Emergency pause state |
 | `Owner` | Address | Contract owner for administrative functions |
 | `PendingOwner` | Address | Pending owner for two-step transfer |
@@ -29,6 +30,12 @@ Instance storage is used for contract-wide configuration that is read frequently
 | `ApprovalTtl` | u32 | Shared ledger TTL used for Blend and DEX approvals (authoritative; `BlendApprovalTtl` retained for legacy fallback) |
 | `MinDeposit` | i128 | Minimum per-transaction deposit |
 | `MaxDeposit` | i128 | Maximum per-transaction deposit |
+| `MinRebalanceInterval` | u32 | Minimum ledgers between `rebalance()` calls; key absent = no cooldown (Issue #59) |
+| `LastRebalanceLedger` | u32 | Ledger of the most recent successful `rebalance()` (Issue #59) |
+| `PendingAgent` | Address | Agent awaiting timelock confirmation (Issue #317) |
+| `AgentTimelockExpiry` | u32 | Ledger at which the pending agent update becomes confirmable (Issue #317) |
+| `PendingUpgradeHash` | BytesN<32> | WASM hash awaiting timelock execution (Issue #316) |
+| `UpgradeTimelockExpiry` | u32 | Ledger at which the pending upgrade becomes executable (Issue #316) |
 | `Version` | u32 | Contract version for upgrade tracking |
 
 ### Persistent Storage
@@ -37,8 +44,9 @@ Persistent storage is used for per-user data that requires efficient access.
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `Balance(Address)` | i128 | User's principal USDC deposit amount |
+| `Balance(Address)` | i128 | Deprecated. Retained only to preserve the serialized `DataKey` layout across upgrades; no longer read or written |
 | `Shares(Address)` | i128 | User's share balance (proportional ownership) |
+| `UserStrategy(Address)` | Symbol | Per-user strategy preference ("conservative", "balanced", "growth") |
 
 ## Persistent Storage TTL Policy
 
@@ -95,7 +103,15 @@ pub enum DataKey {
     MaxDeposit,           // maximum transaction amount
     Version,              // contract version
     BlendPool,            // Blend pool contract address
-    CurrentProtocol,      // symbol of active protocol
+    DexPool,              // DEX liquidity pool contract address (#228)
+    CurrentProtocol,      // symbol of active protocol ("blend" | "dex" | "none")
+    UserStrategy(Address),// user -> strategy preference symbol
+    MinRebalanceInterval, // rebalance cooldown in ledgers (#59)
+    LastRebalanceLedger,  // ledger of last successful rebalance (#59)
+    PendingAgent,         // agent awaiting timelock confirmation (#317)
+    AgentTimelockExpiry,  // ledger the pending agent update unlocks at (#317)
+    PendingUpgradeHash,   // WASM hash awaiting timelock execution (#316)
+    UpgradeTimelockExpiry,// ledger the pending upgrade unlocks at (#316)
     Deployer,             // deployer address (init only)
 }
 ```
@@ -299,6 +315,120 @@ Vault Contract → Blend Protocol Contract
 
 The vault integrates with the Blend protocol to generate yield on deposited USDC. The AI agent triggers rebalancing to move funds into or out of Blend.
 
+### DEX Liquidity Pool Integration (Issue #228)
+
+```
+Vault Contract → DEX Liquidity Pool Contract
+                 ↑
+                 ├── add_liquidity(from, asset, amount, min_out)    - provide USDC liquidity
+                 ├── remove_liquidity(to, asset, amount, min_out)   - withdraw liquidity
+                 └── balance(asset, user)                           - current position size
+```
+
+Alongside Blend lending, the vault can deploy idle USDC as single-asset
+liquidity into a Stellar DEX pool. This backs the Balanced and Growth
+strategies described in the README. The two integrations are mutually exclusive
+at any point in time: `CurrentProtocol` names at most one of `"blend"`,
+`"dex"`, or `"none"`.
+
+See [`docs/DEX_INTEGRATION.md`](docs/DEX_INTEGRATION.md) for the full interface
+research and rationale.
+
+#### Storage
+
+| Key | Storage | Type | Description |
+|-----|---------|------|-------------|
+| `DataKey::DexPool` | Instance | Address | DEX liquidity pool contract address. Absent until `set_dex_pool` is called; any rebalance targeting `"dex"` panics with `DexPoolNotConfigured` while unset. |
+| `DataKey::CurrentProtocol` | Instance | Symbol | Set to `"dex"` once a supply leg succeeds. Shared with the Blend path — the vault is never deployed to both at once. |
+| `DataKey::ApprovalTtl` | Instance | u32 | Shared with Blend. Each supply leg approves the DEX pool to spend USDC until `current_ledger + ApprovalTtl`. |
+
+`set_dex_pool(owner, pool_address)` is owner-only and probes the candidate
+pool's `balance` entrypoint before storing the address, so a wrong or
+non-conforming address is rejected at configuration time rather than at the
+next rebalance. It initializes `CurrentProtocol` to `"none"` when unset and
+emits `DexPoolConfiguredEvent`. There is no separate `DexApprovalTtl` key:
+`set_approval_ttl` governs both integrations.
+
+#### DexPoolClient interface
+
+`DexPoolClient` is an internal adapter mirroring `BlendPoolClient`. It treats
+the pool as a single-asset venue and derives actual amounts from the **vault's
+own USDC balance delta** rather than trusting the pool's return value, so
+partial fills and slippage are observable on-chain.
+
+| Method | Pool call | Returns |
+|---|---|---|
+| `supply(pool, asset, amount, min_out, to)` | `add_liquidity(from, asset, amount, min_out)` | `balance_before - balance_after` (USDC actually supplied) |
+| `withdraw(pool, asset, amount, min_out, to)` | `remove_liquidity(to, asset, amount, min_out)` | `balance_after - balance_before` (USDC actually received) |
+| `get_balance(pool, asset, user)` | `balance(asset, user)` | The vault's current liquidity position |
+
+`min_out` is forwarded to the pool for its own slippage check, and the realized
+delta is re-checked locally by `require_min_out`, which panics with
+`MinOutNotMet` when `min_out > 0` and the leg came up short.
+
+#### Idle vs deployed tracking with DEX positions
+
+DEX positions participate in the same idle/deployed split described under
+[Idle vs Deployed Asset Tracking](#idle-vs-deployed-asset-tracking-issue-321):
+
+- `get_idle_balance()` reads the vault's own USDC token balance and is
+  protocol-agnostic — supplying liquidity moves value out of it.
+- `get_deployed_assets()` dispatches on `CurrentProtocol`. When it is `"dex"`,
+  the figure comes from a live `balance(asset, vault)` call on the configured
+  DEX pool.
+- If `CurrentProtocol` is `"dex"` but `DexPool` is unset, `get_deployed_assets()`
+  returns `0` rather than panicking. The read path tolerates an unconfigured
+  pool; the write path (`rebalance`) does not.
+- `get_asset_breakdown()` returns both figures from a single invocation, so
+  they cannot straddle a rebalance.
+
+Because `get_deployed_assets()` performs a cross-contract call, it costs
+materially more than a plain storage getter — roughly the same order as the
+Blend balance read in the resource table above.
+
+#### Rebalance flow for DEX deployments
+
+`rebalance("dex", expected_apy, min_out)` runs the same sequence as the Blend
+path:
+
+1. Guards: agent auth, not paused, `0 ≤ expected_apy ≤ 10 000`, `min_out ≥ 0`,
+   protocol in the `{"blend", "dex", "none"}` allowlist, and the rebalance
+   cooldown (`MinRebalanceInterval`) has elapsed.
+2. **Exit leg.** If `CurrentProtocol` is a different non-`"none"` protocol, the
+   vault fully exits it first. If a non-zero balance remains after the
+   withdrawal, `RebalanceFailedEvent` is emitted and the call **returns without
+   further state changes** — the transaction is not reverted, so the failure is
+   observable on-chain (Issue #145).
+3. Panic with `DexPoolNotConfigured` if `DataKey::DexPool` is unset.
+4. **Supply leg.** The entire idle USDC balance is supplied: the vault approves
+   the pool for `amount` until `current_ledger + ApprovalTtl`, authorizes the
+   nested `add_liquidity` → `transfer_from` invocation via
+   `authorize_as_current_contract`, then calls the pool. `CurrentProtocol` is
+   set to `"dex"` only when the realized amount is positive.
+5. **Noop case.** With zero idle USDC and nothing moved, `CurrentProtocol` is
+   still set to `"dex"` so tracking matches intent, and the rebalance reports
+   status `"noop"` (mirrors Blend, Issue #146).
+6. `RebalanceEvent` is emitted with status `"success"`, `"partial"` (realized
+   below the attempted amount), `"failed"` (realized zero), or `"noop"`.
+
+Withdrawals follow the reverse path: `withdraw_from_dex(amount, min_out)` pulls
+from the pool when idle USDC cannot cover a redemption, treating `amount == 0`
+as "withdraw the entire position".
+
+#### DEX-specific events
+
+| Event | Topic | Emitted by | Payload |
+|---|---|---|---|
+| `DexSupplyEvent` | `"dex_sup"` (`TOPIC_DEX_SUPPLY`) | supply leg of `rebalance("dex", ..)` | `asset`, `amount_actual` (balance-delta measured), `success` |
+| `DexWithdrawEvent` | `"dex_wd"` (`TOPIC_DEX_WITHDRAW`) | DEX exit leg of `rebalance` or a user redemption | `asset`, `amount_actual`, `success` |
+| `DexPoolConfiguredEvent` | `"dex_cfg"` (`TOPIC_DEX_POOL_CONFIGURED`) | `set_dex_pool` | `old_pool` (`None` on first configuration), `new_pool`, `owner` |
+
+These are emitted **in addition to** the protocol-agnostic `RebalanceEvent` and
+`ProtocolChangedEvent`. Indexers tracking which venue the vault is deployed to
+should treat `ProtocolChangedEvent` as authoritative rather than inferring it
+from supply/withdraw events. See [EVENTS.md](EVENTS.md) for full payload field
+descriptions.
+
 ## Asset Flow Diagrams
 
 ### Deposit Flow
@@ -323,10 +453,16 @@ The vault integrates with the Blend protocol to generate yield on deposited USDC
 ### Rebalance Flow (AI Agent)
 
 1. AI agent evaluates market conditions.
-2. Agent calls `rebalance(protocol, expected_apy)` on vault.
-3. Vault verifies caller is agent and protocol is supported.
-4. Vault executes on-chain movement (e.g., supply to or withdraw from Blend).
-5. `RebalanceEvent` emitted.
+2. Agent calls `rebalance(protocol, expected_apy, min_out)` on vault.
+3. Vault verifies caller is agent, protocol is in `{"blend", "dex", "none"}`,
+   and the `MinRebalanceInterval` cooldown has elapsed.
+4. If already deployed elsewhere, vault exits the current protocol first. An
+   incomplete exit emits `RebalanceFailedEvent` and aborts without further
+   state changes.
+5. Vault executes on-chain movement (supply to or withdraw from Blend or the
+   DEX pool), emitting the protocol-specific supply/withdraw event.
+6. `ProtocolChangedEvent` emitted if `CurrentProtocol` changed.
+7. `RebalanceEvent` emitted with the outcome status.
 
 ## Upgrade Model
 
@@ -338,8 +474,15 @@ When upgrading the contract, the following storage keys must be preserved:
 - `TotalDeposits`, `TotalShares`, `TotalAssets`
 - `Agent`, `UsdcToken`, `Owner`, `Paused`
 - `TvLCap`, `UserDepositCap`, `ApprovalTtl`, `MinDeposit`, `MaxDeposit`
-- `BlendPool`, `CurrentProtocol`
-- `Version` (incremented)
+- `BlendPool`, `DexPool`, `CurrentProtocol`
+- `UserStrategy(Address)`
+- `MinRebalanceInterval`, `LastRebalanceLedger`
+- `PendingAgent`, `AgentTimelockExpiry` (if an agent update is mid-flight)
+- `Version` (incremented by `execute_upgrade`)
+
+`PendingUpgradeHash` and `UpgradeTimelockExpiry` are deliberately **not**
+preserved: `execute_upgrade` clears them before applying the new WASM, so the
+upgraded contract starts with no proposal pending.
 
 ### Version History
 
@@ -348,6 +491,10 @@ When upgrading the contract, the following storage keys must be preserved:
 | 1 | Initial 1:1 balance accounting (no shares) | Historical — superseded |
 | 2 | ERC-4626 share accounting, Blend integration, rounding rules | **Current** |
 | 3 | (Planned) Multi-asset support and advanced rebalancing | Future |
+
+`Version` is incremented by `execute_upgrade`, not by `schedule_upgrade`.
+Scheduling an upgrade that is later cancelled leaves `Version` untouched, so
+`get_version()` always reflects the WASM actually running.
 
 ## Error Handling
 
@@ -503,10 +650,78 @@ but does not influence on-chain fund movement.  Off-chain consumers (AI agent,
 dashboards) use it to audit that the expected yield reported at rebalance time
 is plausible.
 
-## Upgrade Safety (Issue #189)
+## Upgrade Safety (Issues #189, #316)
 
-`upgrade()` is gated by `require_not_paused()`.  During an incident the operator
-pauses the vault to freeze user operations; the upgrade guard ensures that a
-compromised or mistaken WASM upgrade cannot be pushed while the vault is in a
-degraded state.  To upgrade: unpause → upgrade → re-pause if needed.
+Contract upgrades are protected by two independent guards: a pause guard
+(Issue #189) and a two-step timelock (Issue #316).
+
+### Pause guard (Issue #189)
+
+`schedule_upgrade()` and `execute_upgrade()` are both gated by
+`require_not_paused()`. During an incident the operator pauses the vault to
+freeze user operations; the upgrade guard ensures that a compromised or
+mistaken WASM upgrade cannot be pushed while the vault is in a degraded state.
+To upgrade: unpause → schedule → wait out the timelock → execute → re-pause if
+needed.
+
+`cancel_upgrade()` is deliberately **not** pause-gated, so the escape hatch
+stays available even while the vault is paused.
+
+### Two-step timelocked upgrade (Issue #316)
+
+The instant `upgrade(new_wasm_hash)` entrypoint has been removed. Replacing the
+contract's WASM now requires two transactions separated by a mandatory delay,
+which gives users and monitoring systems a window to observe a pending code
+change and react to a malicious or mistaken proposal before it takes effect.
+
+```
+schedule_upgrade(owner, hash)          execute_upgrade(owner)
+        │                                       │
+        ▼                                       ▼
+   [ pending ] ──── UPGRADE_TIMELOCK_LEDGERS ──▶ [ applied ]
+        │              (17,280 ≈ 24 h)
+        │
+        └── cancel_upgrade(owner) ──▶ [ cleared ]
+```
+
+| Function | Auth | Effect |
+|---|---|---|
+| `schedule_upgrade(owner, new_wasm_hash)` | owner, not paused | Records `PendingUpgradeHash` and sets `UpgradeTimelockExpiry = current_ledger + UPGRADE_TIMELOCK_LEDGERS`. Emits `UpgradeScheduledEvent`. |
+| `execute_upgrade(owner)` | owner, not paused | Requires `current_ledger >= UpgradeTimelockExpiry`. Clears both keys, applies the WASM, increments `Version`. Emits `UpgradedEvent`. |
+| `cancel_upgrade(owner)` | owner | Clears both keys so a new proposal can be scheduled. Emits `UpgradeCancelledEvent`. |
+| `get_pending_upgrade()` | none (read-only) | Returns `Some((wasm_hash, effective_ledger))` while a proposal is pending, else `None`. |
+
+**Constant:** `UPGRADE_TIMELOCK_LEDGERS = 17_280` ledgers. At Stellar's ~5 s
+per ledger that is ≈ 86,400 s = 24 hours. It matches `AGENT_TIMELOCK_LEDGERS`
+so both privileged-role changes share one recovery window.
+
+**Storage keys** (instance storage, both cleared on execute *and* on cancel):
+
+| Key | Type | Description |
+|---|---|---|
+| `DataKey::PendingUpgradeHash` | `BytesN<32>` | WASM hash awaiting execution. Its presence is what makes an upgrade "pending". |
+| `DataKey::UpgradeTimelockExpiry` | `u32` | First ledger sequence at which `execute_upgrade()` may be called. |
+
+**Events:** `UpgradeScheduledEvent` (`"upg_sched"`), `UpgradeCancelledEvent`
+(`"upg_cncl"`), and `UpgradedEvent` (`"upgraded"`, now emitted by
+`execute_upgrade` rather than the removed instant path). See
+[EVENTS.md](EVENTS.md) for payload fields.
+
+**Invariants:**
+
+- Only one proposal may be pending at a time. Scheduling while
+  `PendingUpgradeHash` exists panics with `TimelockAlreadyPending`; to change
+  the target hash, cancel first and re-schedule (restarting the 24-hour clock).
+- `execute_upgrade()` with no proposal panics with `NoTimelockPending`; before
+  the expiry ledger it panics with `TimelockNotExpired`.
+- `TimelockAlreadyPending`, `NoTimelockPending`, and `TimelockNotExpired` are
+  shared with the agent timelock (Issue #317) because `#[contracterror]` caps
+  the enum at 50 variants.
+- The pending keys are cleared *before* `update_current_contract_wasm` is
+  called, so a fresh proposal can always be scheduled after execution.
+- A pending proposal has no effect on the running code. Until
+  `execute_upgrade()` succeeds, the deployed WASM is unchanged.
+
+Operational runbooks for scheduling, monitoring, and executing an upgrade live
+in [docs/UPGRADE_MIGRATION.md](docs/UPGRADE_MIGRATION.md).
 4. Minimize state changes in single transaction

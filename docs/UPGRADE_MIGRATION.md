@@ -165,6 +165,81 @@ pub fn migrate(env: Env) {
 
 ---
 
+## 6a. Migrating from the Instant `upgrade()` (Issue #316)
+
+Before Issue #316 the vault exposed a single entrypoint:
+
+```rust
+// Removed. Applied the new WASM in one transaction, with no delay.
+pub fn upgrade(env: Env, owner: Address, new_wasm_hash: BytesN<32>)
+```
+
+That entrypoint **no longer exists**. Any runbook, deploy script, multisig
+template, or CI job that still calls `upgrade` will fail at invocation time with
+an unknown-function error — not silently. Replace it with the two-step flow:
+
+| Before (instant) | After (timelocked) |
+|---|---|
+| `upgrade(owner, hash)` | `schedule_upgrade(owner, hash)` → wait ≥ 17,280 ledgers → `execute_upgrade(owner)` |
+| — | `cancel_upgrade(owner)` to abandon a pending proposal |
+| — | `get_pending_upgrade()` to read `(hash, effective_ledger)` |
+| Emitted `UpgradedEvent` | `UpgradeScheduledEvent` on schedule, `UpgradedEvent` on execute, `UpgradeCancelledEvent` on cancel |
+
+### What operators must change
+
+* **Split the transaction in two.** The upgrade can no longer complete inside a
+  single maintenance window. Budget for a ≥ 24-hour gap between scheduling and
+  execution, and make sure the signer set that schedules is still available to
+  execute.
+* **Do not pre-sign `execute_upgrade` at scheduling time** unless your process
+  can revoke it. The delay only provides safety if someone is actually watching
+  and able to call `cancel_upgrade`.
+* **Assign a monitor.** Subscribe to `UpgradeScheduledEvent` (`"upg_sched"`) or
+  poll `get_pending_upgrade()` for the duration of the window, and compare the
+  pending hash against the WASM you intended to ship.
+* **Keep the vault unpaused to schedule and execute.** Both entrypoints are
+  pause-gated. `cancel_upgrade` is not, so the escape hatch remains usable
+  during an incident.
+* **Run `migrate()` after `execute_upgrade`, not after `schedule_upgrade`.**
+  Scheduling changes no code; the storage schema is still the old one until
+  execution lands.
+
+### New failure modes to expect
+
+| Error | Cause | Resolution |
+|---|---|---|
+| `TimelockAlreadyPending` | `schedule_upgrade` called while a proposal is already pending. | `cancel_upgrade(owner)` first, then re-schedule. The 24-hour clock restarts. |
+| `NoTimelockPending` | `execute_upgrade` or `cancel_upgrade` called with nothing scheduled. | Check `get_pending_upgrade()`; the proposal was already executed or cancelled. |
+| `TimelockNotExpired` | `execute_upgrade` called before `UpgradeTimelockExpiry`. | Compare `get_pending_upgrade()`'s `effective_ledger` against the current ledger sequence and retry after it passes. |
+| `CallerIsNotOwner` | The authorizing address is not the stored owner. All three entrypoints take `owner` as an argument *and* check it against storage. | Confirm the signer matches `get_owner()`. |
+| `Paused` | `schedule_upgrade` or `execute_upgrade` called while the vault is paused. | Unpause first. `cancel_upgrade` is not pause-gated and stays available. |
+
+The first three errors are **shared with the agent timelock** (Issue #317)
+because `#[contracterror]` caps the enum at 50 variants. When debugging, confirm
+which of the two flows raised the error before assuming it was the upgrade path.
+
+### Storage impact
+
+`schedule_upgrade` writes two new instance keys, `DataKey::PendingUpgradeHash`
+and `DataKey::UpgradeTimelockExpiry`. Both are appended `DataKey` variants, so
+existing serialized entries are unaffected and **no storage migration is
+required** to adopt the timelock.
+
+Both keys are cleared by `execute_upgrade` (before the WASM swap) and by
+`cancel_upgrade`. A vault that has never scheduled an upgrade has neither key,
+and `get_pending_upgrade()` returns `None`.
+
+### Emergency guidance
+
+The timelock is a safety feature, not an obstacle to route around: there is no
+bypass, and none should be added. If a hostile or mistaken upgrade is
+scheduled, the response is `cancel_upgrade(owner)` within the window. If owner
+keys themselves are compromised, cancelling is not sufficient — pause the
+vault, transfer ownership to safe keys via `transfer_ownership` /
+`accept_ownership`, and only then cancel the pending proposal.
+
+---
+
 ## 7. Upgrade Checklist
 
 Use this practical checklist for every upgrade.
