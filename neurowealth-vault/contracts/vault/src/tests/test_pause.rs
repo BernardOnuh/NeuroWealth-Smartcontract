@@ -220,3 +220,64 @@ fn test_upgrade_unpaused_vault_clears_pause_guard() {
         "vault must be unpaused before upgrade is allowed"
     );
 }
+
+#[test]
+fn test_emergency_pause_blocks_operations_and_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+
+    let user = Address::generate(&env);
+    let amount = 5_000_000_i128;
+
+    // Pre-fund the user and deposit some tokens to test withdrawal later
+    token_client.mint(&user, &amount);
+    client.deposit(&user, &amount);
+
+    assert!(!client.is_paused());
+
+    // 1. Calls emergency_pause as owner
+    client.emergency_pause(&owner);
+
+    // 2. Asserts is_paused() returns true
+    assert!(client.is_paused(), "Vault should be emergency paused");
+
+    // 3. Verifies the emitted event topic is "emerg"
+    let emergency_events = find_events_by_topic(env.events().all(), &env, TOPIC_EMERGENCY_PAUSED);
+    assert_eq!(
+        emergency_events.len(), 1,
+        "Exactly one emergency paused event should be emitted"
+    );
+    assert_eq!(
+        TOPIC_EMERGENCY_PAUSED,
+        soroban_sdk::symbol_short!("emerg"),
+        "Event topic must be 'emerg'"
+    );
+
+    // 4. Asserts a deposit attempt panics with VaultError::Paused (#35)
+    let deposit_res = client.try_deposit(&user, &amount);
+    assert_eq!(
+        deposit_res,
+        Err(Ok(soroban_sdk::Error::from_contract_error(35))),
+        "deposit attempt should panic with VaultError::Paused (#35)"
+    );
+
+    // 5. Asserts a withdrawal attempt panics with VaultError::Paused (#35)
+    let withdraw_res = client.try_withdraw(&user, &amount);
+    assert_eq!(
+        withdraw_res,
+        Err(Ok(soroban_sdk::Error::from_contract_error(35))),
+        "withdrawal attempt should panic with VaultError::Paused (#35)"
+    );
+
+    // 6. Asserts a rebalance attempt panics with VaultError::Paused (#35)
+    let rebalance_res = client.try_rebalance(&soroban_sdk::symbol_short!("blend"), &500_i128, &0_i128);
+    assert_eq!(
+        rebalance_res,
+        Err(Ok(soroban_sdk::Error::from_contract_error(35))),
+        "rebalance attempt should panic with VaultError::Paused (#35)"
+    );
+}
