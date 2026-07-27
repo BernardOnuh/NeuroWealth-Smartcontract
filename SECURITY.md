@@ -25,7 +25,6 @@ The owner **CANNOT**:
 The authorized AI agent has the following permissions:
 - **Rebalance**: Can call `rebalance()` to signal strategy changes and move funds between protocols
 - **Update Total Assets**: Can report yield accrual or strategy losses
-- **Emergency Pause**: Can trigger an immediate emergency pause if anomalies are detected
 - **Read Access**: Can read all vault state to make yield decisions
 
 The agent **CANNOT**:
@@ -33,6 +32,7 @@ The agent **CANNOT**:
 - Change vault configuration (caps, pools)
 - Access USDC tokens directly outside of protocol interactions
 - Modify user balances without valid asset reporting
+- Pause or unpause the vault (owner-only, including emergency pause)
 
 ### Users
 
@@ -101,25 +101,35 @@ Soroban persistent entries (such as each user's `Shares` record) accrue state re
 
 | Function | Owner | Agent | User | Anyone |
 |----------|-------|-------|------|--------|
-| update_agent | ✅ | - | - | - |
-| confirm_agent_update | ✅ | - | - | - |
-| cancel_agent_update | ✅ | - | - | - |
-| update_total_assets | - | ✅ | - | - |
-| deposit | - | - | ✅ | - |
-| withdraw | - | - | ✅ | - |
-| rebalance | - | ✅ | - | - |
-| pause | ✅ | - | - | - |
-| emergency_pause | - | ✅ | - | - |
-| unpause | ✅ | - | - | - |
-| set_caps | ✅ | - | - | - |
-| schedule_upgrade | ✅ | - | - | - |
-| execute_upgrade | ✅ | - | - | - |
-| cancel_upgrade | ✅ | - | - | - |
-| set_blend_pool | ✅ | - | - | - |
-| set_dex_pool | ✅ | - | - | - |
-| transfer_ownership | ✅ | - | - | - |
+| update_agent | yes | - | - | - |
+| confirm_agent_update | yes | - | - | - |
+| cancel_agent_update | yes | - | - | - |
+| update_total_assets | - | yes | - | - |
+| deposit | - | - | yes | - |
+| withdraw | - | - | yes | - |
+| withdraw_all | - | - | yes | - |
+| rebalance | - | yes | - | - |
+| pause | yes | - | - | - |
+| emergency_pause | yes | - | - | - |
+| unpause | yes | - | - | - |
+| set_caps | yes | - | - | - |
+| set_tvl_cap | yes | - | - | - |
+| set_user_deposit_cap | yes | - | - | - |
+| set_deposit_limits | yes | - | - | - |
+| set_limits | yes | - | - | - |
+| set_rebalance_cooldown | yes | - | - | - |
+| set_approval_ttl | yes | - | - | - |
+| set_blend_approval_ttl | yes | - | - | - |
+| schedule_upgrade | yes | - | - | - |
+| execute_upgrade | yes | - | - | - |
+| cancel_upgrade | yes | - | - | - |
+| set_blend_pool | yes | - | - | - |
+| set_dex_pool | yes | - | - | - |
+| transfer_ownership | yes | - | - | - |
+| cancel_ownership_transfer | yes | - | - | - |
 | accept_ownership | - | - | - | pending owner |
-| touch_user_ttl | - | - | - | ✅ |
+| touch_user_ttl | - | - | - | anyone |
+| set_user_strategy | - | - | yes | - |
 
 ## Security Best Practices Implemented
 
@@ -150,18 +160,10 @@ stellar contract invoke \
 
 **Requires**: owner auth **[owner]**
 
-If the owner key is already confirmed compromised and you cannot sign with it,
-the authorized AI agent can also trigger `emergency_pause`:
-
-```bash
-stellar contract invoke \
-  --id $VAULT_CONTRACT_ID \
-  --source <AGENT_SECRET_KEY> \
-  --network mainnet \
-  -- emergency_pause
-```
-
-**Requires**: agent auth (use this path only if owner key is inaccessible).
+> **Note:** Unlike `pause`, the `emergency_pause` function also requires owner
+> auth. If the owner key is already confirmed compromised and you cannot sign
+> with it, see Step 2 to assess whether the attacker has already rotated
+> the owner address.
 
 ### Step 2 — Assess exposure
 

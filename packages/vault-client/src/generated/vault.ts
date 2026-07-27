@@ -492,32 +492,35 @@ export const VaultErrorCode = {
 
 export type VaultErrorCode = typeof VaultErrorCode[keyof typeof VaultErrorCode];
 
-/** Typed wrapper for contract-level vault errors. */
-export class VaultError extends Error {
-  code: VaultErrorCode;
 
-  constructor(code: VaultErrorCode, message?: string) {
-    super(message ?? `Vault contract error ${code}`);
-    this.name = 'VaultError';
+/**
+ * Typed error wrapping contract-level VaultError responses.
+ *
+ * Provides a `.code` property with the numeric error code and
+ * preserves the original message.
+ */
+export class VaultError extends Error {
+  readonly code: VaultErrorCode;
+
+  constructor(code: VaultErrorCode, message: string) {
+    super(message);
+    this.name = "VaultError";
     this.code = code;
   }
 
-  static fromContractError(contractError: any): VaultError {
-    const maybeCode = contractError?.code ?? contractError?.value ?? contractError?.errorCode;
-    const maybeMessage = contractError?.message ?? contractError?.error ?? contractError?.detail;
-
-    if (typeof maybeCode === 'number' && Object.values(VaultErrorCode).includes(maybeCode as VaultErrorCode)) {
-      return new VaultError(maybeCode as VaultErrorCode, typeof maybeMessage === 'string' ? maybeMessage : undefined);
+  /**
+   * Build a VaultError from a raw contract error object.
+   * Handles both `{code, message}` shapes and raw string errors.
+   */
+  static fromContractError(error: unknown): VaultError {
+    if (error && typeof error === "object" && "code" in error) {
+      const obj = error as { code: number; message?: string };
+      return new VaultError(obj.code as VaultErrorCode, obj.message ?? String(obj.code));
     }
-
-    if (typeof maybeCode === 'string') {
-      const parsedCode = Number(maybeCode);
-      if (!Number.isNaN(parsedCode) && Object.values(VaultErrorCode).includes(parsedCode as VaultErrorCode)) {
-        return new VaultError(parsedCode as VaultErrorCode, typeof maybeMessage === 'string' ? maybeMessage : undefined);
-      }
+    if (typeof error === "string") {
+      return new VaultError(0 as VaultErrorCode, error);
     }
-
-    return new VaultError(VaultErrorCode.ValidationError, typeof maybeMessage === 'string' ? maybeMessage : 'Unknown vault contract error');
+    return new VaultError(0 as VaultErrorCode, String(error));
   }
 }
 
