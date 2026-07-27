@@ -49,6 +49,7 @@ export {
 
   // Error codes
   VaultErrorCode,
+  VaultError,
   type VaultErrorCode as VaultErrorCodeType,
 
   // Constants

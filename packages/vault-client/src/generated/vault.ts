@@ -492,6 +492,35 @@ export const VaultErrorCode = {
 
 export type VaultErrorCode = typeof VaultErrorCode[keyof typeof VaultErrorCode];
 
+/** Typed wrapper for contract-level vault errors. */
+export class VaultError extends Error {
+  code: VaultErrorCode;
+
+  constructor(code: VaultErrorCode, message?: string) {
+    super(message ?? `Vault contract error ${code}`);
+    this.name = 'VaultError';
+    this.code = code;
+  }
+
+  static fromContractError(contractError: any): VaultError {
+    const maybeCode = contractError?.code ?? contractError?.value ?? contractError?.errorCode;
+    const maybeMessage = contractError?.message ?? contractError?.error ?? contractError?.detail;
+
+    if (typeof maybeCode === 'number' && Object.values(VaultErrorCode).includes(maybeCode as VaultErrorCode)) {
+      return new VaultError(maybeCode as VaultErrorCode, typeof maybeMessage === 'string' ? maybeMessage : undefined);
+    }
+
+    if (typeof maybeCode === 'string') {
+      const parsedCode = Number(maybeCode);
+      if (!Number.isNaN(parsedCode) && Object.values(VaultErrorCode).includes(parsedCode as VaultErrorCode)) {
+        return new VaultError(parsedCode as VaultErrorCode, typeof maybeMessage === 'string' ? maybeMessage : undefined);
+      }
+    }
+
+    return new VaultError(VaultErrorCode.ValidationError, typeof maybeMessage === 'string' ? maybeMessage : 'Unknown vault contract error');
+  }
+}
+
 // ----------------------------------------------------------------
 // VaultClient
 // ----------------------------------------------------------------
@@ -561,6 +590,18 @@ export class VaultClient {
   // Internal helpers
   // ------------------------------------------------------------------
 
+  private throwVaultError(method: string, error: unknown): never {
+    if (error instanceof VaultError) {
+      throw error;
+    }
+
+    const vaultError = VaultError.fromContractError(error);
+    if (vaultError.message === `Vault contract error ${vaultError.code}`) {
+      vaultError.message = `Vault contract error for ${method}`;
+    }
+    throw vaultError;
+  }
+
   /**
    * Build a contract invocation operation.
    * @internal
@@ -596,7 +637,7 @@ export class VaultClient {
 
     const sim = await this.server.simulateTransaction(tx);
     if (StellarSdk.SorobanRpc.Api.isSimulationError(sim)) {
-      throw new Error(`Simulation failed for ${method}: ${sim.error}`);
+      this.throwVaultError(method, sim.error ?? sim);
     }
     const resultEntry = (sim as StellarSdk.SorobanRpc.Api.SimulateTransactionSuccessResponse).result;
     if (!resultEntry) return undefined as unknown as T;
@@ -623,7 +664,7 @@ export class VaultClient {
 
     const sim = await this.server.simulateTransaction(tx);
     if (StellarSdk.SorobanRpc.Api.isSimulationError(sim)) {
-      throw new Error(`Simulation failed for ${method}: ${sim.error}`);
+      this.throwVaultError(method, sim.error ?? sim);
     }
 
     const prepared = StellarSdk.SorobanRpc.assembleTransaction(tx, sim).build();
@@ -631,7 +672,7 @@ export class VaultClient {
 
     const sendResp = await this.server.sendTransaction(prepared);
     if (sendResp.status === 'ERROR') {
-      throw new Error(`Submit failed for ${method}: ${JSON.stringify(sendResp.errorResult)}`);
+      this.throwVaultError(method, sendResp.errorResult ?? sendResp);
     }
 
     // Poll until confirmed
@@ -643,7 +684,7 @@ export class VaultClient {
       getResp = await this.server.getTransaction(sendResp.hash);
     }
     if (getResp.status === StellarSdk.SorobanRpc.Api.GetTransactionStatus.FAILED) {
-      throw new Error(`Transaction failed for ${method}: ${JSON.stringify(getResp)}`);
+      this.throwVaultError(method, getResp);
     }
 
     const retval = (getResp as StellarSdk.SorobanRpc.Api.GetSuccessfulTransactionResponse).returnValue;
