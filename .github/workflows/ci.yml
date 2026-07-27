@@ -492,3 +492,39 @@ PY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Contract ID:** \`$CID\`" >> $GITHUB_STEP_SUMMARY
           fi
+
+  arithmetic-guard:
+    name: Arithmetic overflow guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry & build artefacts
+        uses: Swatinem/rust-cache@v2
+
+      # Layer (a): Clippy forbids bare integer arithmetic operators.
+      # -D turns the lint into a hard error; the build fails if any violation
+      # is found.  This runs on ALL features so test helpers are also covered.
+      - name: Clippy — forbid integer_arithmetic
+        working-directory: neurowealth-vault/contracts/vault
+        run: |
+          cargo clippy \
+            --all-features \
+            -- \
+            -D clippy::integer_arithmetic
+
+      # Layer (b): Shell grep sweep for patterns Clippy can miss.
+      # Checks:
+      #   - No source-level #[allow(clippy::integer_arithmetic)] suppression
+      #   - No .checked_*().unwrap() (must use .expect("msg"))
+      #   - No silent 'as i128 / as u64 …' truncating casts in contract source
+      - name: Shell arithmetic sweep
+        working-directory: neurowealth-vault/contracts/vault
+        run: bash scripts/check_arithmetic.sh
+
+      # Summary is written to the GitHub Actions step summary by the script.
