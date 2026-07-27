@@ -38,6 +38,9 @@ jobs:
           - name: "Documentation Check"
             step: "doc"
             working_directory: "neurowealth-vault"
+          - name: "Vault Client Typecheck"
+            step: "vault-client-typecheck"
+            working_directory: "packages/vault-client"
           - name: "Build WASM"
             step: "build-wasm"
             working_directory: "neurowealth-vault"
@@ -112,6 +115,11 @@ jobs:
               ;;
             doc)
               cargo doc --no-deps
+              ;;
+            vault-client-typecheck)
+              npm ci
+              npm run typecheck
+              npm run test
               ;;
             build-wasm)
               RUSTFLAGS="-C target-cpu=mvp" cargo build \
