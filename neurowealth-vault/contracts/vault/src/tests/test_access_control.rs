@@ -222,6 +222,98 @@ fn test_non_owner_cannot_set_limits() {
     );
 }
 
+/// `set_user_deposit_cap` must reject non-owner callers. Mirrors the
+/// `set_deposit_limits` pattern: revoke all auth and assert the try_* call
+/// returns an error.
+#[test]
+fn test_non_owner_cannot_set_user_deposit_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let _non_owner = Address::generate(&env);
+    env.mock_auths(&[]);
+
+    let result = client.try_set_user_deposit_cap(&10_000_000_000_i128);
+    assert!(
+        result.is_err(),
+        "set_user_deposit_cap must reject calls without the owner's authorization"
+    );
+}
+
+/// `set_caps` is owner-only. Revoke all auth and verify the call fails.
+#[test]
+fn test_non_owner_cannot_set_caps() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let _non_owner = Address::generate(&env);
+    env.mock_auths(&[]);
+
+    let result = client.try_set_caps(&1_000_000_i128, &50_000_000_000_i128);
+    assert!(
+        result.is_err(),
+        "set_caps must reject calls without the owner's authorization"
+    );
+}
+
+/// `set_rebalance_cooldown` is owner-only via `require_is_owner`.
+#[test]
+fn test_non_owner_cannot_set_rebalance_cooldown() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let _non_owner = Address::generate(&env);
+    env.mock_auths(&[]);
+
+    let result = client.try_set_rebalance_cooldown(&10_u32);
+    assert!(
+        result.is_err(),
+        "set_rebalance_cooldown must reject calls without the owner's authorization"
+    );
+}
+
+/// `set_approval_ttl` must reject non-owner callers (owner guard via
+/// `require_is_owner`). Use the try_ wrapper to check the error path.
+#[test]
+fn test_non_owner_cannot_set_approval_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let _non_owner = Address::generate(&env);
+    env.mock_auths(&[]);
+
+    let result = client.try_set_approval_ttl(&2_000_u32);
+    assert!(
+        result.is_err(),
+        "set_approval_ttl must reject calls without the owner's authorization"
+    );
+}
+
+#[test]
+#[should_panic(expected = "vault: only owner can set blend approval ttl")]
+fn test_non_owner_cannot_set_blend_approval_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let non_owner = Address::generate(&env);
+    client.set_blend_approval_ttl(&non_owner, &42_u32);
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #19)")]
 fn test_non_owner_cannot_pause() {
