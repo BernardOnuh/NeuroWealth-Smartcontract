@@ -228,6 +228,7 @@ jobs:
           - rebalance_transitions
           - rounding_boundaries
           - share_accounting_invariants
+          - agent_update_timelock
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
