@@ -301,6 +301,19 @@ PY
       - name: Validate README
         run: bash scripts/check-readme.sh .
 
+  security-audit:
+    name: Security Documentation Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify access control table accuracy
+        run: bash scripts/check-access-control.sh
+
+      - name: Verify DataKey::Balance deprecation
+        run: bash scripts/check-balance-deprecation.sh
+
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
