@@ -303,6 +303,9 @@ AI Agent → Vault Contract
 3. AI agent monitors events via RPC/subscription
 4. Agent responds by calling `rebalance()` or adjusting off-chain state
 
+Rotating the agent address is not instant — it goes through a 24-hour timelock.
+See [Agent Update Timelock (Issue #317)](#agent-update-timelock-issue-317).
+
 ### Blend Protocol Integration
 
 ```
@@ -649,6 +652,101 @@ The field is **informational for indexers** — it is emitted in `RebalanceEvent
 but does not influence on-chain fund movement.  Off-chain consumers (AI agent,
 dashboards) use it to audit that the expected yield reported at rebalance time
 is plausible.
+
+## Agent Update Timelock (Issue #317)
+
+The agent address is the only key allowed to call `rebalance()`, so replacing it
+hands control of fund movement to a new keypair. Rotating the agent therefore
+requires two transactions separated by a mandatory delay, giving users and
+monitoring systems a window to observe the pending rotation and react before it
+takes effect.
+
+```
+update_agent(new_agent)                confirm_agent_update()
+        │                                       │
+        ▼                                       ▼
+   [ pending ] ───── AGENT_TIMELOCK_LEDGERS ──▶ [ applied ]
+        │               (17,280 ≈ 24 h)
+        │
+        └── cancel_agent_update() ──▶ [ cleared ]
+```
+
+### Flow
+
+| Function | Auth | Effect |
+|---|---|---|
+| `update_agent(new_agent)` | owner | Records `PendingAgent` and sets `AgentTimelockExpiry = current_ledger + AGENT_TIMELOCK_LEDGERS`. The active `Agent` is **unchanged**. Emits `AgentUpdateProposedEvent`. |
+| `confirm_agent_update()` | owner | Requires `current_ledger >= AgentTimelockExpiry`. Writes `PendingAgent` into `Agent` and clears both pending keys. Emits `AgentUpdateConfirmedEvent` **and** `AgentUpdatedEvent`. |
+| `cancel_agent_update()` | owner | Clears both pending keys so a new proposal can be made. Emits `AgentUpdateCancelledEvent`. |
+| `get_pending_agent_update()` | none (read-only) | Returns `Some((pending_agent, effective_ledger))` while a proposal is pending, else `None`. |
+
+`update_agent()` is the propose step only — it is deliberately *not* an instant
+setter. Until `confirm_agent_update()` succeeds, `get_agent()` still returns the
+old address and only the old agent can call `rebalance()`.
+
+**Constant:** `AGENT_TIMELOCK_LEDGERS = 17_280` ledgers. At Stellar's ~5 s per
+ledger that is ≈ 86,400 s = 24 hours. It matches `UPGRADE_TIMELOCK_LEDGERS` so
+both privileged-role changes share one recovery window.
+
+### Storage keys
+
+Both live in instance storage and are cleared on confirm *and* on cancel.
+
+| Key | Type | Description |
+|---|---|---|
+| `DataKey::PendingAgent` | `Address` | Proposed agent awaiting confirmation. Its presence is what makes an update "pending". |
+| `DataKey::AgentTimelockExpiry` | `u32` | First ledger sequence at which `confirm_agent_update()` may be called. |
+
+### Events
+
+| Event | Topic | Payload |
+|---|---|---|
+| `AgentUpdateProposedEvent` | `"agt_prop"` | `old_agent`, `new_agent`, `effective_ledger` |
+| `AgentUpdateConfirmedEvent` | `"agt_conf"` | `old_agent`, `new_agent` |
+| `AgentUpdateCancelledEvent` | `"agt_cncl"` | `old_agent`, `proposed_new_agent` |
+
+`confirm_agent_update()` additionally re-emits the pre-timelock
+`AgentUpdatedEvent` (`"agent"`) so indexers that already track that topic see
+the rotation without changes. See [EVENTS.md](EVENTS.md) for payload field
+descriptions.
+
+### Security rationale
+
+An owner key compromise is the highest-impact failure mode for the vault: the
+agent controls where deposited USDC is deployed. Without a delay, an attacker
+holding the owner key could swap in an attacker-controlled agent and immediately
+rebalance funds into a hostile "protocol" in a single transaction — no observer
+would have time to react.
+
+The timelock converts that into a 24-hour detectable event:
+
+- The proposal is public on-chain the moment it is made
+  (`AgentUpdateProposedEvent` carries the target address and the exact ledger at
+  which it unlocks), so monitoring can alert on it.
+- During the window the legitimate owner — or a recovered multisig quorum — can
+  call `cancel_agent_update()` to void the proposal, and can `pause()` the vault
+  to freeze `rebalance()` entirely while the incident is handled.
+- Because only one proposal may be pending at a time, an attacker cannot spam
+  proposals to bury the real one; changing the target requires cancelling first,
+  which restarts the full 24-hour clock.
+
+### Invariants
+
+- Only one proposal may be pending at a time. Calling `update_agent()` while
+  `PendingAgent` exists panics with `TimelockAlreadyPending`.
+- `confirm_agent_update()` or `cancel_agent_update()` with no proposal panics
+  with `NoTimelockPending`; confirming before the expiry ledger panics with
+  `TimelockNotExpired`.
+- `TimelockAlreadyPending`, `NoTimelockPending`, and `TimelockNotExpired` are
+  shared with the upgrade timelock (Issue #316) because `#[contracterror]` caps
+  the enum at 50 variants.
+- All three entrypoints require owner auth. A pending proposal grants the
+  proposed agent no privileges whatsoever until confirmation.
+- `cancel_agent_update()` is not pause-gated, so the escape hatch stays
+  available while the vault is paused.
+
+Coverage lives in
+`neurowealth-vault/contracts/vault/src/tests/test_agent_timelock.rs`.
 
 ## Upgrade Safety (Issues #189, #316)
 
