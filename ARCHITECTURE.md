@@ -474,8 +474,15 @@ When upgrading the contract, the following storage keys must be preserved:
 - `TotalDeposits`, `TotalShares`, `TotalAssets`
 - `Agent`, `UsdcToken`, `Owner`, `Paused`
 - `TvLCap`, `UserDepositCap`, `ApprovalTtl`, `MinDeposit`, `MaxDeposit`
-- `BlendPool`, `CurrentProtocol`
-- `Version` (incremented)
+- `BlendPool`, `DexPool`, `CurrentProtocol`
+- `UserStrategy(Address)`
+- `MinRebalanceInterval`, `LastRebalanceLedger`
+- `PendingAgent`, `AgentTimelockExpiry` (if an agent update is mid-flight)
+- `Version` (incremented by `execute_upgrade`)
+
+`PendingUpgradeHash` and `UpgradeTimelockExpiry` are deliberately **not**
+preserved: `execute_upgrade` clears them before applying the new WASM, so the
+upgraded contract starts with no proposal pending.
 
 ### Version History
 
@@ -484,6 +491,10 @@ When upgrading the contract, the following storage keys must be preserved:
 | 1 | Initial 1:1 balance accounting (no shares) | Historical — superseded |
 | 2 | ERC-4626 share accounting, Blend integration, rounding rules | **Current** |
 | 3 | (Planned) Multi-asset support and advanced rebalancing | Future |
+
+`Version` is incremented by `execute_upgrade`, not by `schedule_upgrade`.
+Scheduling an upgrade that is later cancelled leaves `Version` untouched, so
+`get_version()` always reflects the WASM actually running.
 
 ## Error Handling
 
@@ -639,10 +650,78 @@ but does not influence on-chain fund movement.  Off-chain consumers (AI agent,
 dashboards) use it to audit that the expected yield reported at rebalance time
 is plausible.
 
-## Upgrade Safety (Issue #189)
+## Upgrade Safety (Issues #189, #316)
 
-`upgrade()` is gated by `require_not_paused()`.  During an incident the operator
-pauses the vault to freeze user operations; the upgrade guard ensures that a
-compromised or mistaken WASM upgrade cannot be pushed while the vault is in a
-degraded state.  To upgrade: unpause → upgrade → re-pause if needed.
+Contract upgrades are protected by two independent guards: a pause guard
+(Issue #189) and a two-step timelock (Issue #316).
+
+### Pause guard (Issue #189)
+
+`schedule_upgrade()` and `execute_upgrade()` are both gated by
+`require_not_paused()`. During an incident the operator pauses the vault to
+freeze user operations; the upgrade guard ensures that a compromised or
+mistaken WASM upgrade cannot be pushed while the vault is in a degraded state.
+To upgrade: unpause → schedule → wait out the timelock → execute → re-pause if
+needed.
+
+`cancel_upgrade()` is deliberately **not** pause-gated, so the escape hatch
+stays available even while the vault is paused.
+
+### Two-step timelocked upgrade (Issue #316)
+
+The instant `upgrade(new_wasm_hash)` entrypoint has been removed. Replacing the
+contract's WASM now requires two transactions separated by a mandatory delay,
+which gives users and monitoring systems a window to observe a pending code
+change and react to a malicious or mistaken proposal before it takes effect.
+
+```
+schedule_upgrade(owner, hash)          execute_upgrade(owner)
+        │                                       │
+        ▼                                       ▼
+   [ pending ] ──── UPGRADE_TIMELOCK_LEDGERS ──▶ [ applied ]
+        │              (17,280 ≈ 24 h)
+        │
+        └── cancel_upgrade(owner) ──▶ [ cleared ]
+```
+
+| Function | Auth | Effect |
+|---|---|---|
+| `schedule_upgrade(owner, new_wasm_hash)` | owner, not paused | Records `PendingUpgradeHash` and sets `UpgradeTimelockExpiry = current_ledger + UPGRADE_TIMELOCK_LEDGERS`. Emits `UpgradeScheduledEvent`. |
+| `execute_upgrade(owner)` | owner, not paused | Requires `current_ledger >= UpgradeTimelockExpiry`. Clears both keys, applies the WASM, increments `Version`. Emits `UpgradedEvent`. |
+| `cancel_upgrade(owner)` | owner | Clears both keys so a new proposal can be scheduled. Emits `UpgradeCancelledEvent`. |
+| `get_pending_upgrade()` | none (read-only) | Returns `Some((wasm_hash, effective_ledger))` while a proposal is pending, else `None`. |
+
+**Constant:** `UPGRADE_TIMELOCK_LEDGERS = 17_280` ledgers. At Stellar's ~5 s
+per ledger that is ≈ 86,400 s = 24 hours. It matches `AGENT_TIMELOCK_LEDGERS`
+so both privileged-role changes share one recovery window.
+
+**Storage keys** (instance storage, both cleared on execute *and* on cancel):
+
+| Key | Type | Description |
+|---|---|---|
+| `DataKey::PendingUpgradeHash` | `BytesN<32>` | WASM hash awaiting execution. Its presence is what makes an upgrade "pending". |
+| `DataKey::UpgradeTimelockExpiry` | `u32` | First ledger sequence at which `execute_upgrade()` may be called. |
+
+**Events:** `UpgradeScheduledEvent` (`"upg_sched"`), `UpgradeCancelledEvent`
+(`"upg_cncl"`), and `UpgradedEvent` (`"upgraded"`, now emitted by
+`execute_upgrade` rather than the removed instant path). See
+[EVENTS.md](EVENTS.md) for payload fields.
+
+**Invariants:**
+
+- Only one proposal may be pending at a time. Scheduling while
+  `PendingUpgradeHash` exists panics with `TimelockAlreadyPending`; to change
+  the target hash, cancel first and re-schedule (restarting the 24-hour clock).
+- `execute_upgrade()` with no proposal panics with `NoTimelockPending`; before
+  the expiry ledger it panics with `TimelockNotExpired`.
+- `TimelockAlreadyPending`, `NoTimelockPending`, and `TimelockNotExpired` are
+  shared with the agent timelock (Issue #317) because `#[contracterror]` caps
+  the enum at 50 variants.
+- The pending keys are cleared *before* `update_current_contract_wasm` is
+  called, so a fresh proposal can always be scheduled after execution.
+- A pending proposal has no effect on the running code. Until
+  `execute_upgrade()` succeeds, the deployed WASM is unchanged.
+
+Operational runbooks for scheduling, monitoring, and executing an upgrade live
+in [docs/UPGRADE_MIGRATION.md](docs/UPGRADE_MIGRATION.md).
 4. Minimize state changes in single transaction
