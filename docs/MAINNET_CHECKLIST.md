@@ -244,7 +244,8 @@ Before deploying to Mainnet, the team must run an on-chain Pause Drill on Testne
 The Owner key holds upgrade privileges. To secure the contract against single-key compromise or loss, the owner account should be configured with multi-signature security.
 
 ### 🔍 Security Context
-* Soroban allows upgrading contract code via `upgrade()`. An attacker possessing the owner key could upload a malicious WASM binary to hijack user funds.
+* Soroban allows upgrading contract code. An attacker possessing the owner key could upload a malicious WASM binary to hijack user funds.
+* The instant `upgrade()` entrypoint has been replaced by a two-step timelocked flow (Issue #316): `schedule_upgrade` → wait `UPGRADE_TIMELOCK_LEDGERS` (17,280 ledgers ≈ 24 h) → `execute_upgrade`, with `cancel_upgrade` as the escape hatch. The timelock is the last line of defence if the multisig itself is compromised — it converts an instant code swap into a 24-hour, publicly observable event.
 * Stellar natively supports multi-signature operations directly at the account level through account signer thresholds and weights.
 
 ### 📝 Actionable Checklist
@@ -252,12 +253,79 @@ The Owner key holds upgrade privileges. To secure the contract against single-ke
   * **Threshold Settings:**
     * Low threshold (e.g., 1): For triggering simple operations or `pause()` (allows fast emergency response with a single hot trigger key).
     * Medium threshold (e.g., 2 or 3): For configuring caps, setting Blend pools, and `unpause()`.
-    * High threshold (e.g., 3): For calling `upgrade()` (requires multi-party consensus to push new code).
+    * High threshold (e.g., 3): For calling `schedule_upgrade()` and `execute_upgrade()` (requires multi-party consensus to push new code).
+  * Keep `cancel_upgrade()` reachable at a **low** threshold. It is the escape hatch during the timelock window and must not be blocked by an unavailable co-signer.
 - [ ] **Document Signer Distribution:** Ensure keys are distributed securely across key parties using hardware wallets (e.g., Ledger).
 - [ ] **Upgrade Verification Procedure:** Ensure any future WASM upgrades are:
   * Built inside a deterministic environment (e.g., Docker container with exact Rust toolchain versions).
   * Checked against WASM size limits using standard optimization tools (`wasm-opt -Oz`).
   * Signatures collected offline from all co-signers before broadcast.
+
+### 📝 Timelocked Upgrade Verification Drill (Testnet)
+
+The timelock must be exercised end-to-end on testnet before mainnet deployment. The unit tests in `neurowealth-vault/contracts/vault/src/tests/test_upgrade_timelock.rs` cover the gates by advancing the simulated ledger, but they cannot verify the WASM swap or the `Version` bump — the dummy hash they schedule is not installed on-chain. Only a real network run proves the full cycle.
+
+Set `TESTNET_VAULT_CONTRACT_ID`, `OWNER_ADDRESS`, and `NEW_WASM_HASH` (the hex hash returned by `stellar contract install`) before starting.
+
+**Part A — `get_pending_upgrade` returns the correct hash and expiry**
+
+- [ ] **A1. Confirm a clean starting state:** with nothing scheduled, the getter must return `null`.
+  ```bash
+  stellar contract invoke --id $TESTNET_VAULT_CONTRACT_ID --source owner --network testnet -- get_pending_upgrade
+  ```
+- [ ] **A2. Record the current ledger sequence** from RPC (`getLatestLedger`) — call it `L`.
+- [ ] **A3. Schedule the upgrade.**
+  ```bash
+  stellar contract invoke --id $TESTNET_VAULT_CONTRACT_ID --source owner --network testnet -- schedule_upgrade --owner $OWNER_ADDRESS --new_wasm_hash $NEW_WASM_HASH
+  ```
+  * *Expected Result:* Success, and an `UpgradeScheduledEvent` (topic `upg_sched`) carrying `new_wasm_hash` and `effective_ledger`.
+- [ ] **A4. Verify the pending state:** re-run `get_pending_upgrade`.
+  * *Expected Result:* `(wasm_hash, effective_ledger)` where `wasm_hash` byte-for-byte equals `$NEW_WASM_HASH` and `effective_ledger ≈ L + 17280`. Confirm the delta is exactly `UPGRADE_TIMELOCK_LEDGERS`, not a shortened test value.
+- [ ] **A5. Verify the "only one pending" guard:** call `schedule_upgrade` again with any hash.
+  * *Expected Result:* MUST fail with `VaultError::TimelockAlreadyPending` (Error Code `48`).
+- [ ] **A6. Verify the execute gate holds before expiry:** call `execute_upgrade` immediately.
+  ```bash
+  stellar contract invoke --id $TESTNET_VAULT_CONTRACT_ID --source owner --network testnet -- execute_upgrade --owner $OWNER_ADDRESS
+  ```
+  * *Expected Result:* MUST fail with `VaultError::TimelockNotExpired` (Error Code `50`). Confirm `get_version()` is unchanged and the deployed code still behaves as the old build — a pending proposal must have no effect on the running contract.
+
+**Part B — `cancel_upgrade` clears the pending state**
+
+- [ ] **B1. Cancel the proposal scheduled in Part A.**
+  ```bash
+  stellar contract invoke --id $TESTNET_VAULT_CONTRACT_ID --source owner --network testnet -- cancel_upgrade --owner $OWNER_ADDRESS
+  ```
+  * *Expected Result:* Success, and an `UpgradeCancelledEvent` (topic `upg_cncl`) carrying the cancelled hash.
+- [ ] **B2. Verify both storage keys are cleared:** `get_pending_upgrade` MUST return `null` (`PendingUpgradeHash` and `UpgradeTimelockExpiry` are both removed).
+- [ ] **B3. Verify cancel is idempotency-guarded:** call `cancel_upgrade` again.
+  * *Expected Result:* MUST fail with `VaultError::NoTimelockPending` (Error Code `49`).
+- [ ] **B4. Verify `execute_upgrade` is also blocked after cancel.**
+  * *Expected Result:* MUST fail with `VaultError::NoTimelockPending` (Error Code `49`).
+- [ ] **B5. Verify the escape hatch survives a pause:** schedule again, `pause()` the vault, then call `cancel_upgrade`.
+  * *Expected Result:* `schedule_upgrade` and `execute_upgrade` are pause-gated and MUST fail with `VaultError::Paused` (Error Code `35`), but `cancel_upgrade` MUST succeed. Unpause afterwards.
+
+**Part C — full cycle: schedule → wait out the timelock → execute → verify version bump**
+
+- [ ] **C1. Record `get_version()`** before starting — call it `V`.
+- [ ] **C2. Install the new WASM on testnet** and capture its hash.
+  ```bash
+  stellar contract install --wasm target/wasm32-unknown-unknown/release/neurowealth_vault.wasm --source owner --network testnet
+  ```
+  * A hash that is not installed on-chain will trap at `execute_upgrade` time, *after* the 24-hour wait. Verify installation before scheduling.
+- [ ] **C3. Schedule the upgrade** with that hash and note `effective_ledger` from `get_pending_upgrade`.
+- [ ] **C4. Wait out the real timelock.** Testnet has no ledger fast-forward: the 17,280 ledgers take ≈ 24 hours of wall-clock time. **Do not** shorten `UPGRADE_TIMELOCK_LEDGERS` for this drill — the point is to confirm the mainnet constant. Poll `get_pending_upgrade` during the window and confirm the hash never changes.
+- [ ] **C5. Execute once the current ledger sequence `>= effective_ledger`.**
+  ```bash
+  stellar contract invoke --id $TESTNET_VAULT_CONTRACT_ID --source owner --network testnet -- execute_upgrade --owner $OWNER_ADDRESS
+  ```
+  * *Expected Result:* Success, and an `UpgradedEvent` (topic `upgraded`) with `old_version` = `V` and `new_version` = `V + 1`.
+- [ ] **C6. Verify the version bump:** `get_version()` MUST return `V + 1`.
+- [ ] **C7. Verify the pending state was cleared by execution:** `get_pending_upgrade` MUST return `null`, and a fresh `schedule_upgrade` MUST be accepted (no leftover `TimelockAlreadyPending`).
+- [ ] **C8. Verify storage survived the upgrade:** re-check `get_total_assets()`, `get_total_shares()`, `get_owner()`, `get_agent()`, and a sample `get_shares(user)` against the values recorded before C5.
+- [ ] **C9. Run the release's migration entrypoint** if it ships one, then re-run the state checks in C8. The current contract has no `migrate()`; see [UPGRADE_MIGRATION.md](UPGRADE_MIGRATION.md) for the pattern a future release would follow.
+- [ ] **C10. Sign off:** record the drill's ledger numbers, WASM hashes, and transaction hashes in the release ticket.
+
+> **Note:** operational runbooks for scheduling, monitoring, and executing a *production* upgrade live in [UPGRADE_MIGRATION.md](UPGRADE_MIGRATION.md). This drill is the pre-mainnet verification that the timelock itself behaves correctly. The agent-rotation timelock (Issue #317) follows the same shape — see the *Agent Update Timelock* section of [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ---
 
