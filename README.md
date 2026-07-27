@@ -216,7 +216,10 @@ See [`scripts/README-E2E.md`](scripts/README-E2E.md) for end-to-end devnet valid
 
 ## Smart Contract
 The core Soroban vault contract handles all on-chain fund management.
-Key Functions
+
+### Key Functions
+
+#### Core & Administration
 
 | Function | Who Can Call | Description |
 | :--- | :--- | :--- |
@@ -237,6 +240,69 @@ Key Functions
 | `set_tvl_cap` | Owner only | Sets the maximum total TVL that can be deposited |
 | `set_user_deposit_cap` | Owner only | Sets the maximum deposit amount per user |
 | `set_limits` | Owner only | **Deprecated**: Sets user deposit cap and TVL cap (use `set_caps` instead) |
+
+#### Strategy Preference
+
+| Function | Who Can Call | Description |
+| :--- | :--- | :--- |
+| `set_user_strategy` | User (their own preference) | Store a strategy preference (`conservative`, `balanced`, or `growth`) on-chain for the AI agent to read |
+| `get_user_strategy` | Anyone | Read a user's strategy preference (defaults to `balanced` when unset) |
+
+#### Share Math & Previews
+
+| Function | Who Can Call | Description |
+| :--- | :--- | :--- |
+| `preview_deposit_to_shares` | Anyone | Shares that would be minted for a given asset amount (rounds **down**) |
+| `preview_shares_to_assets` | Anyone | Assets that would be returned for a given share amount (rounds **down**) |
+| `preview_withdraw` | Anyone | Shares that would be burned to withdraw a given asset amount (rounds **up**, matching `withdraw`) |
+| `convert_to_shares` | Anyone | ERC-4626 asset → share conversion at the current rate (rounds **down**) |
+| `convert_to_assets` | Anyone | ERC-4626 share → asset conversion at the current rate (rounds **down**) |
+
+#### Asset Tracking
+
+| Function | Who Can Call | Description |
+| :--- | :--- | :--- |
+| `get_idle_balance` | Anyone | USDC held in the vault and not yet deployed to a protocol |
+| `get_deployed_assets` | Anyone | USDC currently supplied to the active protocol (`0` when `CurrentProtocol` is `none`) |
+| `get_asset_breakdown` | Anyone | Both figures in one call as `(idle, deployed)` — avoids two RPC round-trips |
+
+#### Storage Maintenance
+
+| Function | Who Can Call | Description |
+| :--- | :--- | :--- |
+| `touch_user_ttl` | Anyone | Extend the `Shares(user)` persistent entry TTL; returns `false` when no entry exists. Needed because read-only getters have no TTL side effects |
+
+#### Upgrade Timelock (Issue #316)
+
+The instant `upgrade()` entrypoint has been removed — see the *Upgrade Safety* section of [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+| Function | Who Can Call | Description |
+| :--- | :--- | :--- |
+| `schedule_upgrade` | Owner only (not paused) | Propose a new WASM hash; unlocks after `UPGRADE_TIMELOCK_LEDGERS` (17,280 ledgers ≈ 24 h) |
+| `execute_upgrade` | Owner only (not paused) | Apply the pending WASM once the timelock has elapsed and increment `Version` |
+| `cancel_upgrade` | Owner only | Clear the pending upgrade — the recovery path for a malicious or mistaken proposal |
+| `get_pending_upgrade` | Anyone | Returns `Some((wasm_hash, effective_ledger))` while an upgrade is pending, else `None` |
+
+#### Agent Timelock (Issue #317)
+
+Rotating the agent is a two-step, timelocked flow — see the *Agent Update Timelock* section of [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+| Function | Who Can Call | Description |
+| :--- | :--- | :--- |
+| `update_agent` | Owner only | **Propose** a new agent; unlocks after `AGENT_TIMELOCK_LEDGERS` (17,280 ledgers ≈ 24 h). The active agent is unchanged |
+| `confirm_agent_update` | Owner only | Apply the pending agent once the timelock has elapsed |
+| `cancel_agent_update` | Owner only | Clear the pending agent update |
+| `get_pending_agent_update` | Anyone | Returns `Some((pending_agent, effective_ledger))` while an update is pending, else `None` |
+
+#### Rebalance Throttle & Approvals
+
+| Function | Who Can Call | Description |
+| :--- | :--- | :--- |
+| `set_rebalance_cooldown` | Owner only | Minimum ledgers between `rebalance()` calls; `0` disables the cooldown |
+| `get_rebalance_cooldown` | Anyone | Read the configured cooldown in ledgers (`0` = disabled) |
+| `get_last_rebalance_ledger` | Anyone | Ledger of the most recent successful `rebalance()` (`0` if never called) |
+| `set_approval_ttl` | Owner only | Ledger lifetime for Blend/DEX token approvals (bounded to 1,000–500,000 ledgers) |
+| `get_approval_ttl` | Anyone | Read the configured approval TTL, or the default when unset |
 
 ## Security Model
 
