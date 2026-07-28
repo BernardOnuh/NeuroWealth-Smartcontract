@@ -151,3 +151,180 @@ fn test_multi_user_concurrent_deposit_withdraw() {
     // If all shares are zero, the vault may still have residual assets from deployed
     // positions — that's expected.
 }
+
+// ============================================================================
+// ADDITIONAL CONCURRENT SCENARIOS (#476)
+// ============================================================================
+
+/// Two users deposit sequentially → verify share proportions match contributions.
+#[test]
+fn test_concurrent_two_users_sequential_share_proportions() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+    let amount_a = 5_000_000_i128;
+    let amount_b = 3_000_000_i128;
+
+    mint_and_deposit(&env, &client, &usdc_token, &user_a, amount_a);
+    mint_and_deposit(&env, &client, &usdc_token, &user_b, amount_b);
+
+    assert_eq!(client.get_shares(&user_a), amount_a);
+    assert_eq!(client.get_shares(&user_b), amount_b);
+    assert_eq!(client.get_total_shares(), amount_a + amount_b);
+}
+
+/// Two users deposit same amount → verify equal shares.
+#[test]
+fn test_concurrent_two_users_same_amount_equal_shares() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+    let amount = 7_000_000_i128;
+
+    mint_and_deposit(&env, &client, &usdc_token, &user_a, amount);
+    mint_and_deposit(&env, &client, &usdc_token, &user_b, amount);
+
+    assert_eq!(client.get_shares(&user_a), client.get_shares(&user_b));
+}
+
+/// A deposits, B deposits, A withdraws → verify correct remaining amounts.
+#[test]
+fn test_concurrent_deposit_deposit_withdraw_correct_amounts() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+    let a_deposit = 10_000_000_i128;
+    let b_deposit = 5_000_000_i128;
+    let a_withdraw = 4_000_000_i128;
+
+    mint_and_deposit(&env, &client, &usdc_token, &user_a, a_deposit);
+    mint_and_deposit(&env, &client, &usdc_token, &user_b, b_deposit);
+
+    client.withdraw(&user_a, &a_withdraw);
+
+    let a_balance = client.get_balance(&user_a);
+    let b_balance = client.get_balance(&user_b);
+    assert_eq!(a_balance, a_deposit - a_withdraw);
+    assert_eq!(b_balance, b_deposit);
+
+    assert_vault_invariants(&client, &[user_a.clone(), user_b.clone()]);
+}
+
+/// Multiple deposits interleaved with rebalances.
+#[test]
+fn test_concurrent_deposits_interleaved_with_rebalances() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+    let blend_client = MockBlendPoolClient::new(&env, &blend_pool);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+
+    // Seed users
+    for u in [&user_a, &user_b] {
+        token_client.mint(u, &20_000_000_i128);
+    }
+
+    // Interleave deposits and rebalances
+    client.deposit(&user_a, &10_000_000_i128);
+    client.rebalance(&symbol_short!("blend"), &700_i128, &0_i128);
+
+    client.deposit(&user_b, &8_000_000_i128);
+    client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
+
+    client.deposit(&user_a, &5_000_000_i128);
+
+    assert_vault_invariants(&client, &[user_a, user_b]);
+}
+
+/// Deposit during active Blend deployment → verify idle vs deployed split.
+#[test]
+fn test_concurrent_deposit_during_blend_deployment() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let deposit = 20_000_000_i128;
+    let (contract_id, agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+    let blend_client = MockBlendPoolClient::new(&env, &blend_pool);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let user = Address::generate(&env);
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit);
+
+    blend_client.set_max_supply_limit(&15_000_000_i128);
+    client.rebalance(&symbol_short!("blend"), &700_i128, &0_i128);
+
+    // Now deposit additional funds while Blend holds 15 USDC.
+    let second_deposit = 10_000_000_i128;
+    token_client.mint(&user, &second_deposit);
+    client.deposit(&user, &second_deposit);
+
+    // Vault should have some idle + deployed, total = 30
+    assert_eq!(client.get_total_assets(), deposit + second_deposit);
+    let idle = token_client.balance(&contract_id);
+    let deployed = client.get_deployed_assets();
+    assert_eq!(idle + deployed, deposit + second_deposit);
+    assert_vault_invariants(&client, &[user]);
+}
+
+/// Withdrawal that triggers partial Blend exit → verify remaining shares.
+#[test]
+fn test_concurrent_withdrawal_triggers_partial_blend_exit() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let deposit = 20_000_000_i128;
+    let (contract_id, agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+    let blend_client = MockBlendPoolClient::new(&env, &blend_pool);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let user = Address::generate(&env);
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit);
+
+    // Deploy 15 to Blend, leave 5 idle by capping pool at 15.
+    blend_client.set_max_supply_limit(&15_000_000_i128);
+    client.rebalance(&symbol_short!("blend"), &700_i128, &0_i128);
+
+    let idle_before = token_client.balance(&contract_id);
+    let deployed_before = token_client.balance(&blend_pool);
+    assert_eq!(idle_before, 5_000_000_i128);
+    assert_eq!(deployed_before, 15_000_000_i128);
+
+    // Withdraw 7 USDC: vault pulls 5 idle and 2 from Blend (partial exit).
+    let withdraw_amount = 7_000_000_i128;
+    client.withdraw(&user, &withdraw_amount);
+
+    let balance_after = client.get_balance(&user);
+    assert_eq!(balance_after, deposit - withdraw_amount);
+    assert_vault_invariants(&client, &[user]);
+}
