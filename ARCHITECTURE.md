@@ -1,4 +1,4 @@
-# Architecture Documentation 
+# Architecture Documentation
 
 This document describes the technical architecture of the NeuroWealth Vault contract, including storage layout, data structures, and integration patterns.
 
@@ -14,29 +14,29 @@ Instance storage is used for contract-wide configuration that is read frequently
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `Agent` | Address | Authorized AI agent that can call rebalance() |
-| `UsdcToken` | Address | USDC token contract address |
-| `TotalDeposits` | i128 | Total USDC principal deposited (excluding yield) |
-| `TotalShares` | i128 | Total vault shares in circulation |
-| `TotalAssets` | i128 | Total managed assets (principal + yield) |
-| `CurrentProtocol`| Symbol | Active protocol symbol ("blend", "dex", "none") |
-| `BlendPool` | Address | Blend pool contract address |
-| `DexPool` | Address | DEX liquidity pool contract address (Issue #228) |
-| `Paused` | bool | Emergency pause state |
-| `Owner` | Address | Contract owner for administrative functions |
-| `PendingOwner` | Address | Pending owner for two-step transfer |
-| `TvLCap` | i128 | Maximum total value locked |
-| `UserDepositCap` | i128 | Maximum deposit per user |
-| `ApprovalTtl` | u32 | Shared ledger TTL used for Blend and DEX approvals (authoritative; `BlendApprovalTtl` retained for legacy fallback) |
-| `MinDeposit` | i128 | Minimum per-transaction deposit |
-| `MaxDeposit` | i128 | Maximum per-transaction deposit |
-| `MinRebalanceInterval` | u32 | Minimum ledgers between `rebalance()` calls; key absent = no cooldown (Issue #59) |
-| `LastRebalanceLedger` | u32 | Ledger of the most recent successful `rebalance()` (Issue #59) |
-| `PendingAgent` | Address | Agent awaiting timelock confirmation (Issue #317) |
-| `AgentTimelockExpiry` | u32 | Ledger at which the pending agent update becomes confirmable (Issue #317) |
-| `PendingUpgradeHash` | BytesN<32> | WASM hash awaiting timelock execution (Issue #316) |
-| `UpgradeTimelockExpiry` | u32 | Ledger at which the pending upgrade becomes executable (Issue #316) |
-| `Version` | u32 | Contract version for upgrade tracking |
+| | `Agent` | Address | Authorized AI agent that can call rebalance() |
+| | `UsdcToken` | Address | USDC token contract address |
+| | `TotalDeposits` | i128 | Total USDC principal deposited (excluding yield) |
+| | `TotalShares` | i128 | Total vault shares in circulation |
+| | `TotalAssets` | i128 | Total managed assets (principal + yield) |
+| | `CurrentProtocol`| Symbol | Active protocol symbol ("blend", "dex", "none") |
+| | `BlendPool` | Address | Blend pool contract address |
+| | `DexPool` | Address | DEX liquidity pool contract address (Issue #228) |
+| | `Paused` | bool | Emergency pause state |
+| | `Owner` | Address | Contract owner for administrative functions |
+| | `PendingOwner` | Address | Pending owner for two-step transfer |
+| | `TvLCap` | i128 | Maximum total value locked |
+| | `UserDepositCap` | i128 | Maximum deposit per user |
+| | `ApprovalTtl` | u32 | Shared ledger TTL used for Blend and DEX approvals (authoritative; `BlendApprovalTtl` retained for legacy fallback) |
+| | `MinDeposit` | i128 | Minimum per-transaction deposit |
+| | `MaxDeposit` | i128 | Maximum per-transaction deposit |
+| | `MinRebalanceInterval` | u32 | Minimum ledgers between `rebalance()` calls; key absent = no cooldown (Issue #59) |
+| | `LastRebalanceLedger` | u32 | Ledger of the most recent successful `rebalance()` (Issue #59) |
+| | `PendingAgent` | Address | Agent awaiting timelock confirmation (Issue #317) |
+| | `AgentTimelockExpiry` | u32 | Ledger at which the pending agent update becomes confirmable (Issue #317) |
+| | `PendingUpgradeHash` | BytesN<32> | WASM hash awaiting timelock execution (Issue #316) |
+| | `UpgradeTimelockExpiry` | u32 | Ledger at which the pending upgrade becomes executable (Issue #316) |
+| | `Version` | u32 | Contract version for upgrade tracking |
 
 ### Persistent Storage
 
@@ -44,9 +44,64 @@ Persistent storage is used for per-user data that requires efficient access.
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `Balance(Address)` | i128 | Deprecated. Retained only to preserve the serialized `DataKey` layout across upgrades; no longer read or written |
-| `Shares(Address)` | i128 | User's share balance (proportional ownership) |
-| `UserStrategy(Address)` | Symbol | Per-user strategy preference ("conservative", "balanced", "growth") |
+| | `Balance(Address)` | i128 | Deprecated. Retained only to preserve the serialized `DataKey` layout across upgrades; no longer read or written |
+| | `Shares(Address)` | i128 | User's share balance (proportional ownership) |
+| | `UserStrategy(Address)` | Symbol | Per-user strategy preference ("conservative", "balanced", "growth") |
+
+### Storage Key Diagram: Instance vs Persistent
+
+```
++-----------------------------------------------------------+
+|                    NeuroWealth Vault                       |
++-----------------------------------------------------------+
+| Contract-wide State (Instance Storage)                    |
+| - Agent, UsdcToken, Owner, Paused                         |
+| - TotalDeposits, TotalShares, TotalAssets                 |
+| - TvLCap, UserDepositCap, MinDeposit, MaxDeposit          |
+| - CurrentProtocol, BlendPool, DexPool                     |
+| - ApprovalTtl, MinRebalanceInterval, LastRebalanceLedger  |
+| - PendingAgent, AgentTimelockExpiry                       |
+| - PendingUpgradeHash, UpgradeTimelockExpiry               |
+| - Version                                                 |
++-----------------------------------------------------------+
+           |                                       |
+           | writes by: Owner, Agent, System        | writes by: User (on deposit/withdraw)
+           | read by: Everyone                      | read by: User, Agent, Indexers
+           | TTL: None (permanent)                  | TTL: Yes (Soroban rent)
+           v                                       v
++-----------------------+                   +------------------+
+|  Instance Storage     |                   | Persistent Storage|
+|  (contract-wide)       |                   |  (per-user)       |
++-----------------------+                   +------------------+
+| Agent(Address)         |                   | Shares(Address)   |
+| TotalAssets(i128)      |                   | UserStrategy(Addr)|
+| TotalShares(i128)      |                   | Balance(Address)  | <- deprecated
+| TotalDeposits(i128)    |                   +------------------+
+| ...                    |
++-----------------------+
+```
+
+**Access patterns:**
+
+| Key | Category | Writers | Readers | TTL |
+|-----|----------|---------|---------|-----|
+| `Agent` | Instance | Owner (set_agent) | Everyone | None |
+| `UsdcToken` | Instance | initialize only | Everyone | None |
+| `TotalDeposits` | Instance | deposit/withdraw | Everyone | None |
+| `TotalShares` | Instance | deposit/withdraw | Everyone | None |
+| `TotalAssets` | Instance | deposit/withdraw, update_total_assets | Everyone | None |
+| `CurrentProtocol` | Instance | rebalance | Everyone | None |
+| `BlendPool` / `DexPool` | Instance | Owner (set_*_pool) | Everyone | None |
+| `Paused` | Instance | Owner | Everyone | None |
+| `Owner` / `PendingOwner` | Instance | Owner, accept_ownership | Everyone | None |
+| `TvLCap` / dep caps / limits | Instance | Owner | Everyone | None |
+| `MinRebalanceInterval` / `LastRebalanceLedger` | Instance | Owner, rebalance | Everyone | None |
+| `PendingAgent` / `AgentTimelockExpiry` | Instance | update_agent, confirm/cancel | Everyone | None |
+| `PendingUpgradeHash` / `UpgradeTimelockExpiry` | Instance | schedule_upgrade, execute/cancel | Everyone | None |
+| `Version` | Instance | execute_upgrade | Everyone | None |
+| `Shares(user)` | Persistent | deposit/withdraw | User, agent, indexers | Automatic on write; manual via touch_user_ttl() |
+| `UserStrategy(user)` | Persistent | deposit (default), set_user_strategy | Agent (read for rebalance) | Automatic on write |
+| `Balance(user)` | Persistent | None (deprecated) | None (deprecated) | N/A |
 
 ## Persistent Storage TTL Policy
 
@@ -131,6 +186,30 @@ assets_out    = (shares_burned × TotalAssets)  / TotalShares
 
 The on-chain getter `get_exchange_rate()` returns `TotalAssets × 10_000_000 / TotalShares` (7-decimal fixed-point) to avoid fractional values.
 
+### Overflow Safety
+
+All share↔asset conversions use checked arithmetic:
+
+```rust
+// assets → shares (deposit, floor division)
+shares = (assets * total_shares) / total_assets   // checked_mul
+
+// shares → assets (withdraw, floor division)  
+assets = (shares * total_assets) / total_shares   // checked_mul
+
+// exchange rate (7-decimal fixed point)
+rate = (total_assets * 10_000_000) / total_shares // checked_mul
+```
+
+**Maximum safe input before overflow depends on the current totals:**
+
+- For `convert_to_shares`: `assets` must be ≤ `i128::MAX / total_shares` to avoid overflow in the `assets * total_shares` product. With a 100M USDC TVL cap and typical share counts, the practical deposit limit is far below this boundary, but the checked multiply ensures safety regardless of future configuration changes.
+- For `convert_to_assets`: `shares` must be ≤ `i128::MAX / total_assets` to avoid overflow in the `shares * total_assets` product.
+
+Current defaults (100M TVL cap) keep both products safely under `i128::MAX` for all realistic inputs. The checked operations ensure the contract reverts with an explicit error rather than silently wrapping if a configuration or environment change ever pushes these boundaries.
+
+Tests in `tests/test_checked_arithmetic.rs` verify the overflow guard at `i128::MAX`.
+
 ### Yield Accrual via update_total_assets
 
 The AI agent calls `update_total_assets(new_total)` to report yield earned in external protocols (e.g. Blend). This increases `TotalAssets` without changing `TotalShares`, which raises the share price for all holders. The update is bounded: a single call cannot decrease `TotalAssets` below the current value, and cannot increase it beyond a configurable maximum basis-point delta, preventing the agent from inflating balances arbitrarily.
@@ -162,6 +241,7 @@ assets = (shares * total_assets) / total_shares
 - **Proportional Yield**: Users benefit from yield accrual as the `TotalAssets` increases relative to `TotalShares`.
 - **Atomic Conversions**: Deposits mint shares and withdrawals burn shares based on the real-time asset/share ratio.
 - **ERC-4626 Compatibility**: Implements standard preview and conversion functions.
+- **Overflow Protection**: All intermediate products use `checked_mul` to prevent i128 overflow, with explicit panic messages.
 
 ## Rounding Rules
 
@@ -288,12 +368,12 @@ Vault Contract → USDC Token Contract (via token::Client)
 
 ```
 AI Agent → Vault Contract
-           ├── get_balance(user) - monitor positions (read-only, no TTL write)
-           ├── get_shares(user) - monitor share balances (read-only)
-           ├── touch_user_ttl(user) - optional TTL maintenance for idle users
-           ├── get_total_deposits() - monitor TVL
-           └── rebalance(strategy) - signal strategy changes
-           ↓
+            ├── get_balance(user) - monitor positions (read-only, no TTL write)
+            ├── get_shares(user) - monitor share balances (read-only)
+            ├── touch_user_ttl(user) - optional TTL maintenance for idle users
+            ├── get_total_deposits() - monitor TVL
+            └── rebalance(strategy) - signal strategy changes
+            ↓
      DepositEvent / WithdrawEvent (via Soroban events)
 ```
 
@@ -341,9 +421,9 @@ research and rationale.
 
 | Key | Storage | Type | Description |
 |-----|---------|------|-------------|
-| `DataKey::DexPool` | Instance | Address | DEX liquidity pool contract address. Absent until `set_dex_pool` is called; any rebalance targeting `"dex"` panics with `DexPoolNotConfigured` while unset. |
-| `DataKey::CurrentProtocol` | Instance | Symbol | Set to `"dex"` once a supply leg succeeds. Shared with the Blend path — the vault is never deployed to both at once. |
-| `DataKey::ApprovalTtl` | Instance | u32 | Shared with Blend. Each supply leg approves the DEX pool to spend USDC until `current_ledger + ApprovalTtl`. |
+| | `DataKey::DexPool` | Instance | Address | DEX liquidity pool contract address. Absent until `set_dex_pool` is called; any rebalance targeting `"dex"` panics with `DexPoolNotConfigured` while unset. |
+| | `DataKey::CurrentProtocol` | Instance | Symbol | Set to `"dex"` once a supply leg succeeds. Shared with the Blend path — the vault is never deployed to both at once. |
+| | `DataKey::ApprovalTtl` | Instance | u32 | Shared with Blend. Each supply leg approves the DEX pool to spend USDC until `current_ledger + ApprovalTtl`. |
 
 `set_dex_pool(owner, pool_address)` is owner-only and probes the candidate
 pool's `balance` entrypoint before storing the address, so a wrong or
@@ -360,10 +440,10 @@ own USDC balance delta** rather than trusting the pool's return value, so
 partial fills and slippage are observable on-chain.
 
 | Method | Pool call | Returns |
-|---|---|---|
-| `supply(pool, asset, amount, min_out, to)` | `add_liquidity(from, asset, amount, min_out)` | `balance_before - balance_after` (USDC actually supplied) |
-| `withdraw(pool, asset, amount, min_out, to)` | `remove_liquidity(to, asset, amount, min_out)` | `balance_after - balance_before` (USDC actually received) |
-| `get_balance(pool, asset, user)` | `balance(asset, user)` | The vault's current liquidity position |
+|--------|-----------|---------|
+| | `supply(pool, asset, amount, min_out, to)` | `add_liquidity(from, asset, amount, min_out)` | `balance_before - balance_after` (USDC actually supplied) |
+| | `withdraw(pool, asset, amount, min_out, to)` | `remove_liquidity(to, asset, amount, min_out)` | `balance_after - balance_before` (USDC actually received) |
+| | `get_balance(pool, asset, user)` | `balance(asset, user)` | The vault's current liquidity position |
 
 `min_out` is forwarded to the pool for its own slippage check, and the realized
 delta is re-checked locally by `require_min_out`, which panics with
@@ -421,15 +501,15 @@ as "withdraw the entire position".
 #### DEX-specific events
 
 | Event | Topic | Emitted by | Payload |
-|---|---|---|---|
-| `DexSupplyEvent` | `"dex_sup"` (`TOPIC_DEX_SUPPLY`) | supply leg of `rebalance("dex", ..)` | `asset`, `amount_actual` (balance-delta measured), `success` |
-| `DexWithdrawEvent` | `"dex_wd"` (`TOPIC_DEX_WITHDRAW`) | DEX exit leg of `rebalance` or a user redemption | `asset`, `amount_actual`, `success` |
-| `DexPoolConfiguredEvent` | `"dex_cfg"` (`TOPIC_DEX_POOL_CONFIGURED`) | `set_dex_pool` | `old_pool` (`None` on first configuration), `new_pool`, `owner` |
+|-------|-------|------------|---------|
+| | `DexSupplyEvent` | `"dex_sup"` (`TOPIC_DEX_SUPPLY`) | supply leg of `rebalance("dex", ..)` | `asset`, `amount_actual` (balance-delta measured), `success` |
+| | `DexWithdrawEvent` | `"dex_wd"` (`TOPIC_DEX_WITHDRAW`) | DEX exit leg of `rebalance` or a user redemption | `asset`, `amount_actual`, `success` |
+| | `DexPoolConfiguredEvent` | `"dex_cfg"` (`TOPIC_DEX_POOL_CONFIGURED`) | `set_dex_pool` | `old_pool` (`None` on first configuration), `new_pool`, `owner` |
 
 These are emitted **in addition to** the protocol-agnostic `RebalanceEvent` and
 `ProtocolChangedEvent`. Indexers tracking which venue the vault is deployed to
 should treat `ProtocolChangedEvent` as authoritative rather than inferring it
-from supply/withdraw events. See [EVENTS.md](EVENTS.md) for full payload field
+from supply/withdraw events. See [EVENTS.md](EVENTS.md) for payload field
 descriptions.
 
 ## Asset Flow Diagrams
@@ -491,9 +571,9 @@ upgraded contract starts with no proposal pending.
 
 | Version | Changes | Status |
 |---------|---------|--------|
-| 1 | Initial 1:1 balance accounting (no shares) | Historical — superseded |
-| 2 | ERC-4626 share accounting, Blend integration, rounding rules | **Current** |
-| 3 | (Planned) Multi-asset support and advanced rebalancing | Future |
+| | 1 | Initial 1:1 balance accounting (no shares) | Historical — superseded |
+| | 2 | ERC-4626 share accounting, Blend integration, rounding rules | **Current** |
+| | 3 | (Planned) Multi-asset support and advanced rebalancing | Future |
 
 `Version` is incremented by `execute_upgrade`, not by `schedule_upgrade`.
 Scheduling an upgrade that is later cancelled leaves `Version` untouched, so
@@ -509,17 +589,17 @@ table and wording conventions.
 
 | Function | VaultError variant (code) | Condition |
 |----------|--------------------------|-----------|
-| `initialize` | `AlreadyInitialized` (#4) | Called more than once |
-| `deposit` | `Paused` (#35) | Vault is paused |
-| `deposit` | `AmountMustBePositive` (#37) | amount ≤ 0 |
-| `deposit` | `BelowMinimumDeposit` (#38) | amount < min_deposit |
-| `deposit` | `ExceedsUserDepositCap` (#40) | user cumulative > cap |
-| `deposit` | `ExceedsTvlCap` (#41) | total_assets + amount > tvl_cap |
-| `withdraw` | `Paused` (#35) | Vault is paused |
-| `withdraw` | `AmountMustBePositive` (#37) | amount ≤ 0 |
-| `withdraw` | `InsufficientShares` (#8) | shares to burn > user shares |
-| `rebalance` | `Paused` (#35) | Vault is paused |
-| `unpause` | `NotPaused` (#21) | Called when not paused |
+| | `initialize` | `AlreadyInitialized` (#4) | Called more than once |
+| | `deposit` | `Paused` (#35) | Vault is paused |
+| | `deposit` | `AmountMustBePositive` (#37) | amount ≤ 0 |
+| | `deposit` | `BelowMinimumDeposit` (#38) | amount < min_deposit |
+| | `deposit` | `ExceedsUserDepositCap` (#40) | user cumulative > cap |
+| | `deposit` | `ExceedsTvlCap` (#41) | total_assets + amount > tvl_cap |
+| | `withdraw` | `Paused` (#35) | Vault is paused |
+| | `withdraw` | `AmountMustBePositive` (#37) | amount ≤ 0 |
+| | `withdraw` | `InsufficientShares` (#8) | shares to burn > user shares |
+| | `rebalance` | `Paused` (#35) | Vault is paused |
+| | `unpause` | `NotPaused` (#21) | Called when not paused |
 
 ### Return Values
 
@@ -572,12 +652,12 @@ MockBlendPool and TestToken test helpers.  Upper bounds used as soft regression
 gates in `tests/test_budget.rs`.
 
 | Operation | CPU instructions | Memory bytes |
-|---|---|---|
-| `deposit` | < 5 000 000 | < 300 000 |
-| `withdraw` (no Blend) | < 5 000 000 | < 300 000 |
-| `withdraw` (Blend pull) | < 15 000 000 | < 600 000 |
-| `rebalance → blend` | < 15 000 000 | < 600 000 |
-| `rebalance → none` | < 15 000 000 | < 600 000 |
+|-----------|------------------|--------------|
+| | `deposit` | < 5 000 000 | < 300 000 |
+| | `withdraw` (no Blend) | < 5 000 000 | < 300 000 |
+| | `withdraw` (Blend pull) | < 15 000 000 | < 600 000 |
+| | `rebalance → blend` | < 15 000 000 | < 600 000 |
+| | `rebalance → none` | < 15 000 000 | < 600 000 |
 
 Cross-contract operations (Blend supply/withdraw) cost roughly 3× a simple
 deposit because each `invoke_contract` carries its own CPU and memory overhead.
@@ -587,9 +667,9 @@ deposit because each `invoke_contract` carries its own CPU and memory overhead.
 The vault distinguishes between two components of its total managed value:
 
 | Component | Getter | Description |
-|---|---|---|
-| **Idle** | `get_idle_balance()` | USDC held directly in the vault contract, not yet deployed to any protocol. |
-| **Deployed** | `get_deployed_assets()` | USDC currently supplied to an external yield protocol (e.g., Blend, DEX). |
+|-----------|--------|-------------|
+| | **Idle** | `get_idle_balance()` | USDC held directly in the vault contract, not yet deployed to any protocol. |
+| | **Deployed** | `get_deployed_assets()` | USDC currently supplied to an external yield protocol (e.g., Blend, DEX). |
 
 Both values are also available in a single atomic call via `get_asset_breakdown()`, which returns `(idle, deployed)` — useful for dashboards and AI agents that need both figures without two separate RPC round-trips.
 
@@ -619,9 +699,9 @@ on-chain state before any yield reporting adjustment.
 Two separate values track vault accounting:
 
 | Field | Updated by | Includes yield? | Used for |
-|---|---|---|---|
-| `TotalDeposits` | `deposit`, `withdraw` | No | Principal bookkeeping, reporting only |
-| `TotalAssets` | `deposit`, `withdraw`, `update_total_assets` | Yes | Share pricing, TVL cap guard, all economic math |
+|-------|------------|-----------------|----------|
+| | `TotalDeposits` | `deposit`, `withdraw` | No | Principal bookkeeping, reporting only |
+| | `TotalAssets` | `deposit`, `withdraw`, `update_total_assets` | Yes | Share pricing, TVL cap guard, all economic math |
 
 **Design decision (issue #299):** `TotalDeposits` is intentionally *not* synced
 when `update_total_assets()` is called.  It is a principal-only counter.
@@ -674,11 +754,11 @@ update_agent(new_agent)                confirm_agent_update()
 ### Flow
 
 | Function | Auth | Effect |
-|---|---|---|
-| `update_agent(new_agent)` | owner | Records `PendingAgent` and sets `AgentTimelockExpiry = current_ledger + AGENT_TIMELOCK_LEDGERS`. The active `Agent` is **unchanged**. Emits `AgentUpdateProposedEvent`. |
-| `confirm_agent_update()` | owner | Requires `current_ledger >= AgentTimelockExpiry`. Writes `PendingAgent` into `Agent` and clears both pending keys. Emits `AgentUpdateConfirmedEvent` **and** `AgentUpdatedEvent`. |
-| `cancel_agent_update()` | owner | Clears both pending keys so a new proposal can be made. Emits `AgentUpdateCancelledEvent`. |
-| `get_pending_agent_update()` | none (read-only) | Returns `Some((pending_agent, effective_ledger))` while a proposal is pending, else `None`. |
+|----------|------|--------|
+| | `update_agent(new_agent)` | owner | Records `PendingAgent` and sets `AgentTimelockExpiry = current_ledger + AGENT_TIMELOCK_LEDGERS`. The active `Agent` is **unchanged**. Emits `AgentUpdateProposedEvent`. |
+| | `confirm_agent_update()` | owner | Requires `current_ledger >= AgentTimelockExpiry`. Writes `PendingAgent` into `Agent` and clears both pending keys. Emits `AgentUpdateConfirmedEvent` **and** `AgentUpdatedEvent`. |
+| | `cancel_agent_update()` | owner | Clears both pending keys so a new proposal can be made. Emits `AgentUpdateCancelledEvent`. |
+| | `get_pending_agent_update()` | none (read-only) | Returns `Some((pending_agent, effective_ledger))` while a proposal is pending, else `None`. |
 
 `update_agent()` is the propose step only — it is deliberately *not* an instant
 setter. Until `confirm_agent_update()` succeeds, `get_agent()` still returns the
@@ -693,17 +773,17 @@ both privileged-role changes share one recovery window.
 Both live in instance storage and are cleared on confirm *and* on cancel.
 
 | Key | Type | Description |
-|---|---|---|
-| `DataKey::PendingAgent` | `Address` | Proposed agent awaiting confirmation. Its presence is what makes an update "pending". |
-| `DataKey::AgentTimelockExpiry` | `u32` | First ledger sequence at which `confirm_agent_update()` may be called. |
+|-----|------|-------------|
+| | `DataKey::PendingAgent` | `Address` | Proposed agent awaiting confirmation. Its presence is what makes an update "pending". |
+| | `DataKey::AgentTimelockExpiry` | `u32` | First ledger sequence at which `confirm_agent_update()` may be called. |
 
 ### Events
 
 | Event | Topic | Payload |
-|---|---|---|
-| `AgentUpdateProposedEvent` | `"agt_prop"` | `old_agent`, `new_agent`, `effective_ledger` |
-| `AgentUpdateConfirmedEvent` | `"agt_conf"` | `old_agent`, `new_agent` |
-| `AgentUpdateCancelledEvent` | `"agt_cncl"` | `old_agent`, `proposed_new_agent` |
+|-------|-------|---------|
+| | `AgentUpdateProposedEvent` | `"agt_prop"` | `old_agent`, `new_agent`, `effective_ledger` |
+| | `AgentUpdateConfirmedEvent` | `"agt_conf"` | `old_agent`, `new_agent` |
+| | `AgentUpdateCancelledEvent` | `"agt_cncl"` | `old_agent`, `proposed_new_agent` |
 
 `confirm_agent_update()` additionally re-emits the pre-timelock
 `AgentUpdatedEvent` (`"agent"`) so indexers that already track that topic see
@@ -783,11 +863,11 @@ schedule_upgrade(owner, hash)          execute_upgrade(owner)
 ```
 
 | Function | Auth | Effect |
-|---|---|---|
-| `schedule_upgrade(owner, new_wasm_hash)` | owner, not paused | Records `PendingUpgradeHash` and sets `UpgradeTimelockExpiry = current_ledger + UPGRADE_TIMELOCK_LEDGERS`. Emits `UpgradeScheduledEvent`. |
-| `execute_upgrade(owner)` | owner, not paused | Requires `current_ledger >= UpgradeTimelockExpiry`. Clears both keys, applies the WASM, increments `Version`. Emits `UpgradedEvent`. |
-| `cancel_upgrade(owner)` | owner | Clears both keys so a new proposal can be scheduled. Emits `UpgradeCancelledEvent`. |
-| `get_pending_upgrade()` | none (read-only) | Returns `Some((wasm_hash, effective_ledger))` while a proposal is pending, else `None`. |
+|----------|------|--------|
+| | `schedule_upgrade(owner, new_wasm_hash)` | owner, not paused | Records `PendingUpgradeHash` and sets `UpgradeTimelockExpiry = current_ledger + UPGRADE_TIMELOCK_LEDGERS`. Emits `UpgradeScheduledEvent`. |
+| | `execute_upgrade(owner)` | owner, not paused | Requires `current_ledger >= UpgradeTimelockExpiry`. Clears both keys, applies the WASM, increments `Version`. Emits `UpgradedEvent`. |
+| | `cancel_upgrade(owner)` | owner | Clears both keys so a new proposal can be scheduled. Emits `UpgradeCancelledEvent`. |
+| | `get_pending_upgrade()` | none (read-only) | Returns `Some((wasm_hash, effective_ledger))` while a proposal is pending, else `None`. |
 
 **Constant:** `UPGRADE_TIMELOCK_LEDGERS = 17_280` ledgers. At Stellar's ~5 s
 per ledger that is ≈ 86,400 s = 24 hours. It matches `AGENT_TIMELOCK_LEDGERS`
@@ -796,9 +876,9 @@ so both privileged-role changes share one recovery window.
 **Storage keys** (instance storage, both cleared on execute *and* on cancel):
 
 | Key | Type | Description |
-|---|---|---|
-| `DataKey::PendingUpgradeHash` | `BytesN<32>` | WASM hash awaiting execution. Its presence is what makes an upgrade "pending". |
-| `DataKey::UpgradeTimelockExpiry` | `u32` | First ledger sequence at which `execute_upgrade()` may be called. |
+|-----|------|-------------|
+| | `DataKey::PendingUpgradeHash` | `BytesN<32>` | WASM hash awaiting execution. Its presence is what makes an upgrade "pending". |
+| | `DataKey::UpgradeTimelockExpiry` | `u32` | First ledger sequence at which `execute_upgrade()` may be called. |
 
 **Events:** `UpgradeScheduledEvent` (`"upg_sched"`), `UpgradeCancelledEvent`
 (`"upg_cncl"`), and `UpgradedEvent` (`"upgraded"`, now emitted by
