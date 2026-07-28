@@ -7,3 +7,9 @@ plan.md
 
 issue.md
 pr.md
+
+node_modules/
+.next/
+dist/
+.env
+.env.local
