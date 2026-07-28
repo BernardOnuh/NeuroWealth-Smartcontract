@@ -267,6 +267,30 @@ pub struct CapsUpdatedEvent {
 ```
 
 
+### 8e. RebalanceCooldownUpdatedEvent
+**Topic:** `"reb_cd"` (`TOPIC_REBALANCE_COOLDOWN_UPDATED`)
+
+Emitted when the minimum rebalance cooldown is updated via `set_rebalance_cooldown`.
+
+```rust
+pub struct RebalanceCooldownUpdatedEvent {
+    pub old_interval: u32,   // Minimum ledgers between rebalances before the change, or 0 if disabled
+    pub new_interval: u32,   // Minimum ledgers between rebalances after the change, or 0 if disabled
+}
+```
+
+### 8f. ApprovalTtlUpdatedEvent
+**Topic:** `"ttl_upd"` (`TOPIC_APPROVAL_TTL_UPDATED`)
+
+Emitted when the shared Blend/DEX approval TTL is updated via `set_approval_ttl`.
+
+```rust
+pub struct ApprovalTtlUpdatedEvent {
+    pub old_ttl: u32,   // Approval TTL in ledgers before the change
+    pub new_ttl: u32,   // Approval TTL in ledgers after the change
+}
+```
+
 ### 9. AgentUpdatedEvent
 **Topic:** `"agent"` (`TOPIC_AGENT_UPDATED`)
 
