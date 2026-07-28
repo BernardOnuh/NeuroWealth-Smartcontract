@@ -149,8 +149,9 @@ directories once development begins:
 | Component | Directory | Status |
 |-----------|-----------|--------|
 | AI agent backend (Node.js / Python) | `agent/` | Planned |
-| Next.js web frontend | `frontend/` | Planned |
-| WhatsApp bot handler | `whatsapp/` | Planned |
+| Next.js web frontend | `frontend/` | Completed (#471, #472) |
+| WhatsApp bot handler | `whatsapp/` | Completed (#469) |
+| PostgreSQL / Supabase schema | `db/` / `supabase/` | Completed (#470) |
 
 ## Getting Started
 
