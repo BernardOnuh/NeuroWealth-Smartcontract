@@ -187,6 +187,91 @@ fn test_execute_after_timelock_passes_gate() {
     client.execute_upgrade(&owner);
 }
 
+// ── Full lifecycle test (#421) ───────────────────────────────────────────
+
+/// Tests the complete upgrade timelock lifecycle with a real WASM hash:
+/// 1. Schedule upgrade — emits UpgradeScheduledEvent
+/// 2. get_pending_upgrade() returns the hash and expiry
+/// 3. execute_upgrade before timelock fails with TimelockNotExpired
+/// 4. Advance ledger past timelock
+/// 5. execute_upgrade succeeds — emits UpgradedEvent with incremented version
+/// 6. get_version() returns 2
+/// 7. get_pending_upgrade() returns None
+#[test]
+fn test_upgrade_timelock_full_lifecycle() {
+    use crate::{UpgradedEvent, TOPIC_UPGRADED};
+    use soroban_sdk::TryFromVal;
+    use soroban_sdk::IntoVal;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    // Verify initial version
+    assert_eq!(client.get_version(), 1);
+
+    // 1. Register the contract's own WASM so the upgrade will succeed
+    let wasm_hash = env.register_contract_wasm(NeuroWealthVault);
+    assert_ne!(wasm_hash, BytesN::from_array(&env, &[0u8; 32]));
+
+    client.schedule_upgrade(&owner, &wasm_hash);
+
+    // Verify UpgradeScheduledEvent was emitted
+    let scheduled = find_events_by_topic(
+        env.events().all(),
+        &env,
+        crate::TOPIC_UPGRADE_SCHEDULED,
+    );
+    assert_eq!(
+        scheduled.len(),
+        1,
+        "exactly one UpgradeScheduledEvent expected"
+    );
+
+    // 2. get_pending_upgrade returns the hash and expiry
+    let pending = client.get_pending_upgrade();
+    assert!(pending.is_some(), "pending upgrade should be recorded");
+    let (pending_hash, expiry) = pending.unwrap();
+    assert_eq!(pending_hash, wasm_hash, "pending hash must match");
+
+    // 3. Execute before timelock — must fail
+    let before = client.try_execute_upgrade(&owner);
+    assert!(
+        before.is_err(),
+        "execute before timelock must be rejected"
+    );
+
+    // 4. Advance ledger past the timelock
+    env.ledger().set_sequence_number(expiry);
+
+    // 5. Execute the upgrade — should succeed with a real WASM
+    client.execute_upgrade(&owner);
+
+    // 6. Verify UpgradedEvent was emitted with incremented version
+    let upgraded_events = find_events_by_topic(env.events().all(), &env, TOPIC_UPGRADED);
+    assert_eq!(
+        upgraded_events.len(),
+        1,
+        "exactly one UpgradedEvent expected"
+    );
+    let (_, _, data) = &upgraded_events[0];
+    let ev: UpgradedEvent =
+        UpgradedEvent::try_from_val(&env, data).expect("UpgradedEvent decode");
+    assert_eq!(ev.old_version, 1, "old_version must be 1");
+    assert_eq!(ev.new_version, 2, "new_version must be 2");
+
+    // 7. Verify get_version() returns the new version
+    assert_eq!(client.get_version(), 2);
+
+    // 8. Verify get_pending_upgrade() returns None
+    assert!(
+        client.get_pending_upgrade().is_none(),
+        "pending upgrade must be cleared after execution"
+    );
+}
+
 // ── cancel flow ───────────────────────────────────────────────────────────────
 
 /// Cancel clears the pending proposal.
