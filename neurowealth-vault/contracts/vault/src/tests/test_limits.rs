@@ -1,7 +1,7 @@
 //! Tests for deposit limits and caps
 
 use super::utils::*;
-use crate::{DataKey, DEFAULT_MIN_DEPOSIT};
+use crate::{DataKey, DEFAULT_MIN_DEPOSIT, MAX_DEPOSIT_CEILING};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 #[test]
@@ -131,6 +131,52 @@ fn test_set_deposit_limits_max_less_than_min() {
     let max = 4_000_000_i128; // Less than min
 
     client.set_deposit_limits(&min, &max);
+}
+
+// ============================================================================
+// ISSUE #435 — UPPER BOUND ON set_deposit_limits' max
+// ============================================================================
+
+/// `max` set exactly to the ceiling is accepted (inclusive boundary).
+#[test]
+fn test_set_deposit_limits_max_at_ceiling_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_deposit_limits(&DEFAULT_MIN_DEPOSIT, &MAX_DEPOSIT_CEILING);
+
+    assert_eq!(client.get_max_deposit(), MAX_DEPOSIT_CEILING);
+}
+
+/// One unit above the ceiling must be rejected, preventing a misconfigured
+/// astronomically-high per-transaction maximum (e.g. an accidental `i128::MAX`).
+#[test]
+#[should_panic(expected = "Error(Contract, #66)")]
+fn test_set_deposit_limits_max_above_ceiling_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_deposit_limits(&DEFAULT_MIN_DEPOSIT, &(MAX_DEPOSIT_CEILING + 1));
+}
+
+/// An accidental `i128::MAX` (the historical footgun this issue guards
+/// against) must be rejected rather than silently disabling the per-tx cap.
+#[test]
+#[should_panic(expected = "Error(Contract, #66)")]
+fn test_set_deposit_limits_rejects_i128_max() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_deposit_limits(&DEFAULT_MIN_DEPOSIT, &i128::MAX);
 }
 
 #[test]

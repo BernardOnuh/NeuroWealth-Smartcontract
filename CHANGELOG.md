@@ -11,6 +11,21 @@ This changelog is tied to the vault contract `Version` storage value. Each relea
 ## [Unreleased]
 <!-- Add entries below. Format: `- Short description (Issue #N).` -->
 <!-- If this PR bumps get_version(), note the new Version value here. -->
+- `initialize` now rejects the zero address (the unspendable all-zero ed25519
+  account) for `deployer`, `owner`, `agent`, and `usdc_token`, with dedicated
+  `VaultError` codes 62-65, so a vault can never be initialized with a
+  burned/unusable role address (Issue #434).
+- `set_deposit_limits` now rejects a `max` above a new `MAX_DEPOSIT_CEILING`
+  (100,000,000,000 raw units), via `VaultError::MaximumDepositExceedsCeiling`
+  (code 66), preventing a misconfigured astronomically-high per-transaction
+  maximum (Issue #435).
+- `set_rebalance_cooldown` now emits `RebalanceCooldownUpdatedEvent`
+  (`reb_cd`) with the old and new cooldown interval, so indexers can track
+  cooldown changes without polling storage (Issue #436).
+- `set_approval_ttl` now emits `ApprovalTtlUpdatedEvent` (`ttl_upd`) with the
+  old and new TTL, matching the event pattern already used by `set_caps` and
+  `set_deposit_limits` (Issue #437).
+- No `Version` bump (pre-mainnet).
 - **Shares-only balance accounting (Issue #184):** `DataKey::Balance(Address)`
   is confirmed deprecated and unused by core deposit/withdraw/getter logic;
   the discriminant is retained only to preserve the serialized `DataKey`

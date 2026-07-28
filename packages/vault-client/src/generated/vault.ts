@@ -199,6 +199,22 @@ export interface DepositLimitsUpdatedEvent {
 }
 
 /** Emitted by the contract. */
+export interface RebalanceCooldownUpdatedEvent {
+  /** Minimum ledgers between rebalances before the change, or `0` if disabled */
+  old_interval: number;
+  /** Minimum ledgers between rebalances after the change, or `0` if disabled */
+  new_interval: number;
+}
+
+/** Emitted by the contract. */
+export interface ApprovalTtlUpdatedEvent {
+  /** Approval TTL in ledgers before the change */
+  old_ttl: number;
+  /** Approval TTL in ledgers after the change */
+  new_ttl: number;
+}
+
+/** Emitted by the contract. */
 export interface AgentUpdatedEvent {
   /** Agent address that was authorized before the change */
   old_agent: string;
@@ -470,6 +486,38 @@ export const VaultErrorCode = {
   NoTimelockPending: 49,
   /** The timelock delay has not yet elapsed. */
   TimelockNotExpired: 50,
+  /** Share conversion intermediate product overflow (assets * total_shares). */
+  ShareConversionOverflow: 51,
+  /** Total deposits arithmetic overflow. */
+  TotalDepositsOverflow: 52,
+  /** User shares arithmetic overflow. */
+  SharesOverflow: 53,
+  /** Total shares arithmetic overflow. */
+  TotalSharesOverflow: 54,
+  /** Total assets arithmetic overflow. */
+  TotalAssetsOverflow: 55,
+  /** Share conversion intermediate product overflow (shares * total_assets). */
+  ShareToAssetConversionOverflow: 56,
+  /** Exchange rate intermediate product overflow (total_assets * scalar). */
+  ExchangeRateOverflow: 57,
+  /** Arithmetic underflow in withdrawal. */
+  WithdrawalUnderflow: 58,
+  /** Maximum decrease calculation overflow. */
+  MaxDecreaseOverflow: 59,
+  /** Total available balance overflow. */
+  TotalAvailableOverflow: 60,
+  /** Version counter overflow. */
+  VersionOverflow: 61,
+  /** Deployer address supplied to `initialize` is the zero address. */
+  DeployerCannotBeZeroAddress: 62,
+  /** Owner address supplied to `initialize` is the zero address. */
+  OwnerCannotBeZeroAddress: 63,
+  /** Agent address supplied to `initialize` is the zero address. */
+  AgentCannotBeZeroAddress: 64,
+  /** USDC token address supplied to `initialize` is the zero address. */
+  UsdcTokenCannotBeZeroAddress: 65,
+  /** Maximum per-transaction deposit exceeds the absolute configured ceiling. */
+  MaximumDepositExceedsCeiling: 66,
   /** General validation error */
   ValidationError: 100,
   /** Vault is paused, deposits and withdrawals disabled */
