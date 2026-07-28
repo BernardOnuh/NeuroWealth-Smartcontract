@@ -136,7 +136,7 @@ use core::cmp::min;
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
-    vec, Address, BytesN, Env, IntoVal, Symbol, Val, Vec,
+    vec, Address, BytesN, Env, IntoVal, String, Symbol, Val, Vec,
 };
 
 // ============================================================================
@@ -283,6 +283,16 @@ pub enum VaultError {
     TotalAvailableOverflow = 60,
     /// Version counter overflow.
     VersionOverflow = 61,
+    /// Deployer address supplied to `initialize` is the zero address.
+    DeployerCannotBeZeroAddress = 62,
+    /// Owner address supplied to `initialize` is the zero address.
+    OwnerCannotBeZeroAddress = 63,
+    /// Agent address supplied to `initialize` is the zero address.
+    AgentCannotBeZeroAddress = 64,
+    /// USDC token address supplied to `initialize` is the zero address.
+    UsdcTokenCannotBeZeroAddress = 65,
+    /// Maximum per-transaction deposit exceeds the absolute configured ceiling.
+    MaximumDepositExceedsCeiling = 66,
 }
 
 // ============================================================================
@@ -636,6 +646,32 @@ pub struct DepositLimitsUpdatedEvent {
     pub new_max: i128,
 }
 
+/// Emitted when the minimum rebalance cooldown is updated via
+/// `set_rebalance_cooldown`.
+///
+/// # Topics
+/// - `SymbolShort("reb_cd")` (`TOPIC_REBALANCE_COOLDOWN_UPDATED`) - Event identifier
+#[contracttype]
+pub struct RebalanceCooldownUpdatedEvent {
+    /// Minimum ledgers between rebalances before the change, or `0` if disabled
+    pub old_interval: u32,
+    /// Minimum ledgers between rebalances after the change, or `0` if disabled
+    pub new_interval: u32,
+}
+
+/// Emitted when the shared Blend/DEX approval TTL is updated via
+/// `set_approval_ttl`.
+///
+/// # Topics
+/// - `SymbolShort("ttl_upd")` (`TOPIC_APPROVAL_TTL_UPDATED`) - Event identifier
+#[contracttype]
+pub struct ApprovalTtlUpdatedEvent {
+    /// Approval TTL in ledgers before the change
+    pub old_ttl: u32,
+    /// Approval TTL in ledgers after the change
+    pub new_ttl: u32,
+}
+
 /// Emitted when the AI agent address changes.
 ///
 /// Published alongside [`AgentUpdateConfirmedEvent`] by `confirm_agent_update`
@@ -943,6 +979,12 @@ const DEFAULT_TVL_CAP: i128 = 100_000_000_000_i128;
 const DEFAULT_USER_DEPOSIT_CAP: i128 = 10_000_000_000_i128;
 const DEFAULT_MIN_DEPOSIT: i128 = 1_000_000_i128;
 const DEFAULT_MAX_DEPOSIT: i128 = 10_000_000_000_i128;
+/// Absolute upper bound the owner can configure via `set_deposit_limits`.
+///
+/// Comfortably above any realistic per-transaction limit, this rejects
+/// configuration mistakes (e.g. an accidental `i128::MAX`) that would
+/// otherwise disable the per-transaction maximum-deposit guard entirely.
+const MAX_DEPOSIT_CEILING: i128 = 100_000_000_000_i128;
 /// Default Blend token approval lifetime.
 /// 100_000 ledgers × ~5s per ledger ≈ 5.7 days on Stellar mainnet.
 pub(crate) const DEFAULT_APPROVAL_TTL: u32 = 100_000;
@@ -970,15 +1012,16 @@ const USER_SHARES_TTL_EXTEND_TO: u32 = 100;
 const DEFAULT_BLEND_APPROVAL_TTL: u32 = 100_000;
 
 use topics::{
-    TOPIC_AGENT_UPDATE_CANCELLED, TOPIC_AGENT_UPDATE_CONFIRMED, TOPIC_AGENT_UPDATE_PROPOSED,
-    TOPIC_AGENT_UPDATED, TOPIC_ASSETS_UPDATED, TOPIC_BLEND_POOL_CONFIGURED, TOPIC_BLEND_SUPPLY,
-    TOPIC_BLEND_WITHDRAW, TOPIC_CAPS_UPDATED, TOPIC_DEPOSIT, TOPIC_DEPOSIT_LIMITS_UPDATED,
-    TOPIC_DEX_POOL_CONFIGURED, TOPIC_DEX_SUPPLY, TOPIC_DEX_WITHDRAW, TOPIC_EMERGENCY_PAUSED,
-    TOPIC_INIT, TOPIC_LIMITS_UPDATED, TOPIC_OWNERSHIP_CANCELLED, TOPIC_OWNERSHIP_INITIATED,
-    TOPIC_OWNERSHIP_TRANSFERRED, TOPIC_PAUSED, TOPIC_PROTOCOL_CHANGED, TOPIC_REBALANCE,
-    TOPIC_REBALANCE_FAILED, TOPIC_TVL_CAP_UPDATED, TOPIC_UNPAUSED, TOPIC_UPGRADE_CANCELLED,
-    TOPIC_UPGRADE_SCHEDULED, TOPIC_UPGRADED, TOPIC_USER_CAP_UPDATED, TOPIC_USER_STRATEGY_UPDATED,
-    TOPIC_WITHDRAW,
+    TOPIC_AGENT_UPDATED, TOPIC_AGENT_UPDATE_CANCELLED, TOPIC_AGENT_UPDATE_CONFIRMED,
+    TOPIC_AGENT_UPDATE_PROPOSED, TOPIC_APPROVAL_TTL_UPDATED, TOPIC_ASSETS_UPDATED,
+    TOPIC_BLEND_POOL_CONFIGURED, TOPIC_BLEND_SUPPLY, TOPIC_BLEND_WITHDRAW, TOPIC_CAPS_UPDATED,
+    TOPIC_DEPOSIT, TOPIC_DEPOSIT_LIMITS_UPDATED, TOPIC_DEX_POOL_CONFIGURED, TOPIC_DEX_SUPPLY,
+    TOPIC_DEX_WITHDRAW, TOPIC_EMERGENCY_PAUSED, TOPIC_INIT, TOPIC_LIMITS_UPDATED,
+    TOPIC_OWNERSHIP_CANCELLED, TOPIC_OWNERSHIP_INITIATED, TOPIC_OWNERSHIP_TRANSFERRED,
+    TOPIC_PAUSED, TOPIC_PROTOCOL_CHANGED, TOPIC_REBALANCE, TOPIC_REBALANCE_COOLDOWN_UPDATED,
+    TOPIC_REBALANCE_FAILED, TOPIC_TVL_CAP_UPDATED, TOPIC_UNPAUSED, TOPIC_UPGRADED,
+    TOPIC_UPGRADE_CANCELLED, TOPIC_UPGRADE_SCHEDULED, TOPIC_USER_CAP_UPDATED,
+    TOPIC_USER_STRATEGY_UPDATED, TOPIC_WITHDRAW,
 };
 
 impl BlendPoolClient {
@@ -1230,6 +1273,20 @@ impl NeuroWealthVault {
         }
     }
 
+    /// The canonical "burned" Stellar account: the ed25519 public key whose
+    /// 32-byte payload is all zeros. No known private key can sign for it.
+    ///
+    /// `soroban_sdk::Address` has no `Default` impl, so this is the
+    /// zero-address sentinel used to reject burned addresses in `initialize`
+    /// (issue #434).
+    #[inline]
+    fn zero_address(env: &Env) -> Address {
+        Address::from_string(&String::from_str(
+            env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        ))
+    }
+
     // ==========================================================================
     // INITIALIZATION
     // ==========================================================================
@@ -1267,6 +1324,7 @@ impl NeuroWealthVault {
     /// - If the vault has already been initialized (Agent key already exists).
     /// - If the caller is not the expected deployer.
     /// - If deployer authorization fails.
+    /// - If `deployer`, `owner`, `agent`, or `usdc_token` is the zero address.
     pub fn initialize(
         env: Env,
         deployer: Address,
@@ -1277,6 +1335,22 @@ impl NeuroWealthVault {
     ) {
         if env.storage().instance().has(&DataKey::Agent) {
             panic_with_error!(&env, VaultError::AlreadyInitialized);
+        }
+
+        // Reject the zero address for every role so a vault can never be
+        // initialized with a burned/unusable address (issue #434).
+        let zero = Self::zero_address(&env);
+        if deployer == zero {
+            panic_with_error!(&env, VaultError::DeployerCannotBeZeroAddress);
+        }
+        if owner == zero {
+            panic_with_error!(&env, VaultError::OwnerCannotBeZeroAddress);
+        }
+        if agent == zero {
+            panic_with_error!(&env, VaultError::AgentCannotBeZeroAddress);
+        }
+        if usdc_token == zero {
+            panic_with_error!(&env, VaultError::UsdcTokenCannotBeZeroAddress);
         }
 
         // Verify the deployer is the one that actually deployed the contract
@@ -2462,6 +2536,7 @@ impl NeuroWealthVault {
     /// - If the caller is not the owner.
     /// - If min is less than 1 USDC (1_000_000 stroops).
     /// - If max is less than min.
+    /// - If max exceeds [`MAX_DEPOSIT_CEILING`].
     pub fn set_deposit_limits(env: Env, min: i128, max: i128) {
         Self::require_initialized(&env);
         Self::require_is_owner(&env);
@@ -2473,6 +2548,11 @@ impl NeuroWealthVault {
             VaultError::MinimumDepositTooLow,
         );
         Self::require(&env, max >= min, VaultError::MaximumDepositBelowMinimum);
+        Self::require(
+            &env,
+            max <= MAX_DEPOSIT_CEILING,
+            VaultError::MaximumDepositExceedsCeiling,
+        );
 
         let old_min = env
             .storage()
@@ -2520,8 +2600,8 @@ impl NeuroWealthVault {
     ///
     /// # Events
     ///
-    /// None. The cooldown is configuration-only; read the effective value back
-    /// with [`get_rebalance_cooldown`](crate::NeuroWealthVault::get_rebalance_cooldown).
+    /// Emits:
+    /// - `RebalanceCooldownUpdatedEvent`
     ///
     /// # Errors
     ///
@@ -2555,6 +2635,12 @@ impl NeuroWealthVault {
         Self::require_initialized(&env);
         Self::require_is_owner(&env);
 
+        let old_interval: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinRebalanceInterval)
+            .unwrap_or(0);
+
         if interval == 0 {
             // Removing the key disables the cooldown entirely.
             env.storage()
@@ -2565,6 +2651,14 @@ impl NeuroWealthVault {
                 .instance()
                 .set(&DataKey::MinRebalanceInterval, &interval);
         }
+
+        env.events().publish(
+            (TOPIC_REBALANCE_COOLDOWN_UPDATED,),
+            RebalanceCooldownUpdatedEvent {
+                old_interval,
+                new_interval: interval,
+            },
+        );
     }
 
     /// Returns the configured minimum rebalance interval (ledgers), or `0` if
@@ -2637,7 +2731,8 @@ impl NeuroWealthVault {
     ///
     /// # Events
     ///
-    /// None.
+    /// Emits:
+    /// - `ApprovalTtlUpdatedEvent`
     ///
     /// # Errors
     ///
@@ -2674,7 +2769,17 @@ impl NeuroWealthVault {
             panic_with_error!(&env, VaultError::ApprovalTtlTooHigh);
         }
 
+        let old_ttl = Self::get_approval_ttl_internal(&env);
+
         env.storage().instance().set(&DataKey::ApprovalTtl, &ttl);
+
+        env.events().publish(
+            (TOPIC_APPROVAL_TTL_UPDATED,),
+            ApprovalTtlUpdatedEvent {
+                old_ttl,
+                new_ttl: ttl,
+            },
+        );
     }
 
     /// Returns the shared protocol approval TTL in ledgers.

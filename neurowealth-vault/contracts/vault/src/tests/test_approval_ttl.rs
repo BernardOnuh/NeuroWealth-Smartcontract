@@ -1,11 +1,11 @@
 //! Tests for configurable Blend token approval TTL.
 
 use super::utils::*;
-use crate::DEFAULT_APPROVAL_TTL;
+use crate::{ApprovalTtlUpdatedEvent, DEFAULT_APPROVAL_TTL, TOPIC_APPROVAL_TTL_UPDATED};
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, MockAuth, MockAuthInvoke},
-    Address, Env, IntoVal,
+    Address, Env, IntoVal, TryFromVal,
 };
 
 fn setup_blend_position(
@@ -165,6 +165,76 @@ fn test_set_approval_ttl_rejects_above_maximum() {
     );
 }
 
+/// `set_approval_ttl` emits `ApprovalTtlUpdatedEvent` with the old and new
+/// TTL so indexers can track TTL changes without polling storage (Issue #437).
+#[test]
+fn test_set_approval_ttl_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner) = setup_vault(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_approval_ttl(&17_280_u32);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_APPROVAL_TTL_UPDATED);
+    assert_eq!(
+        events.len(),
+        1,
+        "exactly one approval-ttl-updated event expected"
+    );
+
+    let (_, _, data) = &events[0];
+    let event = ApprovalTtlUpdatedEvent::try_from_val(&env, data)
+        .expect("should be a valid ApprovalTtlUpdatedEvent");
+    assert_eq!(
+        event.old_ttl, DEFAULT_APPROVAL_TTL,
+        "old_ttl before any explicit configuration is the default TTL"
+    );
+    assert_eq!(event.new_ttl, 17_280);
+}
+
+/// A second call to `set_approval_ttl` reports the previously configured TTL
+/// as `old_ttl`, not the all-time default.
+#[test]
+fn test_set_approval_ttl_event_reflects_previous_value() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner) = setup_vault(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_approval_ttl(&50_000_u32);
+    client.set_approval_ttl(&200_000_u32);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_APPROVAL_TTL_UPDATED);
+    assert_eq!(events.len(), 2, "two approval-ttl-updated events expected");
+
+    let (_, _, data) = &events[1];
+    let event = ApprovalTtlUpdatedEvent::try_from_val(&env, data)
+        .expect("should be a valid ApprovalTtlUpdatedEvent");
+    assert_eq!(event.old_ttl, 50_000);
+    assert_eq!(event.new_ttl, 200_000);
+}
+
+/// A rejected `set_approval_ttl` call (out of bounds) must not emit an event.
+#[test]
+fn test_set_approval_ttl_rejected_call_emits_no_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner) = setup_vault(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let _ = client.try_set_approval_ttl(&999_u32);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_APPROVAL_TTL_UPDATED);
+    assert!(
+        events.is_empty(),
+        "a rejected set_approval_ttl call must not emit an event"
+    );
+}
+
 // ─── DEX supply path (#341) ─────────────────────────────────────────────────
 //
 // The DEX supply path (`rebalance("dex", ..)` → `add_liquidity`) approves the
@@ -203,8 +273,7 @@ fn test_dex_approval_expiry_minimum_ttl_is_valid() {
 #[test]
 fn test_default_approval_ttl_used_for_dex_supply() {
     let env = Env::default();
-    let (contract_id, _usdc_token, dex_pool, client, token_client) =
-        setup_dex_position(&env, None);
+    let (contract_id, _usdc_token, dex_pool, client, token_client) = setup_dex_position(&env, None);
 
     assert_eq!(client.get_approval_ttl(), DEFAULT_APPROVAL_TTL);
 
