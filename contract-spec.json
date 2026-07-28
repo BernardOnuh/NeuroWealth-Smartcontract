@@ -1706,6 +1706,40 @@
       ]
     },
     {
+      "name": "RebalanceCooldownUpdatedEvent",
+      "topic": "reb_cd",
+      "description": "Emitted by the contract.",
+      "fields": [
+        {
+          "name": "old_interval",
+          "type": "u32",
+          "description": "Minimum ledgers between rebalances before the change, or `0` if disabled"
+        },
+        {
+          "name": "new_interval",
+          "type": "u32",
+          "description": "Minimum ledgers between rebalances after the change, or `0` if disabled"
+        }
+      ]
+    },
+    {
+      "name": "ApprovalTtlUpdatedEvent",
+      "topic": "ttl_upd",
+      "description": "Emitted by the contract.",
+      "fields": [
+        {
+          "name": "old_ttl",
+          "type": "u32",
+          "description": "Approval TTL in ledgers before the change"
+        },
+        {
+          "name": "new_ttl",
+          "type": "u32",
+          "description": "Approval TTL in ledgers after the change"
+        }
+      ]
+    },
+    {
       "name": "AgentUpdatedEvent",
       "topic": "agent",
       "description": "Emitted by the contract.",
@@ -2264,6 +2298,70 @@
     "VaultError::TimelockNotExpired": {
       "code": 50,
       "description": "The timelock delay has not yet elapsed."
+    },
+    "VaultError::ShareConversionOverflow": {
+      "code": 51,
+      "description": "Share conversion intermediate product overflow (assets * total_shares)."
+    },
+    "VaultError::TotalDepositsOverflow": {
+      "code": 52,
+      "description": "Total deposits arithmetic overflow."
+    },
+    "VaultError::SharesOverflow": {
+      "code": 53,
+      "description": "User shares arithmetic overflow."
+    },
+    "VaultError::TotalSharesOverflow": {
+      "code": 54,
+      "description": "Total shares arithmetic overflow."
+    },
+    "VaultError::TotalAssetsOverflow": {
+      "code": 55,
+      "description": "Total assets arithmetic overflow."
+    },
+    "VaultError::ShareToAssetConversionOverflow": {
+      "code": 56,
+      "description": "Share conversion intermediate product overflow (shares * total_assets)."
+    },
+    "VaultError::ExchangeRateOverflow": {
+      "code": 57,
+      "description": "Exchange rate intermediate product overflow (total_assets * scalar)."
+    },
+    "VaultError::WithdrawalUnderflow": {
+      "code": 58,
+      "description": "Arithmetic underflow in withdrawal."
+    },
+    "VaultError::MaxDecreaseOverflow": {
+      "code": 59,
+      "description": "Maximum decrease calculation overflow."
+    },
+    "VaultError::TotalAvailableOverflow": {
+      "code": 60,
+      "description": "Total available balance overflow."
+    },
+    "VaultError::VersionOverflow": {
+      "code": 61,
+      "description": "Version counter overflow."
+    },
+    "VaultError::DeployerCannotBeZeroAddress": {
+      "code": 62,
+      "description": "Deployer address supplied to `initialize` is the zero address."
+    },
+    "VaultError::OwnerCannotBeZeroAddress": {
+      "code": 63,
+      "description": "Owner address supplied to `initialize` is the zero address."
+    },
+    "VaultError::AgentCannotBeZeroAddress": {
+      "code": 64,
+      "description": "Agent address supplied to `initialize` is the zero address."
+    },
+    "VaultError::UsdcTokenCannotBeZeroAddress": {
+      "code": 65,
+      "description": "USDC token address supplied to `initialize` is the zero address."
+    },
+    "VaultError::MaximumDepositExceedsCeiling": {
+      "code": 66,
+      "description": "Maximum per-transaction deposit exceeds the absolute configured ceiling."
     },
     "ValidationError": {
       "code": 100,
