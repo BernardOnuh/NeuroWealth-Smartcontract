@@ -266,6 +266,96 @@ function handleDepositEvent(raw: unknown): DepositEvent {
 }
 ```
 
+### Event Listener
+
+`VaultEventListener` wraps Soroban RPC event streaming with type-safe handlers for each event:
+
+```typescript
+import { VaultEventListener } from '@neurowealth/vault-client';
+import * as StellarSdk from '@stellar/stellar-sdk';
+
+const server = new StellarSdk.SorobanRpc.Server('https://soroban-testnet.stellar.org');
+
+const listener = new VaultEventListener({
+  contractId: 'C...YOUR_CONTRACT_ADDRESS',
+  server,
+  networkPassphrase: StellarSdk.Networks.TESTNET,
+});
+
+// Type-safe handlers for each event
+listener.onDeposit((event) => {
+  console.log(`Deposit: ${event.user} deposited ${event.amount} USDC`);
+});
+
+listener.onWithdraw((event) => {
+  console.log(`Withdraw: ${event.user} withdrew ${event.amount} USDC`);
+});
+
+listener.onRebalance((event) => {
+  console.log(`Rebalance: ${event.protocol} status=${event.status}`);
+});
+
+listener.onRebalanceFailed((event) => {
+  console.log(`Rebalance failed: ${event.from_protocol} — ${event.reason}`);
+});
+
+listener.onAgentUpdateProposed((event) => {
+  console.log(`Agent update proposed: ${event.old_agent} -> ${event.new_agent}`);
+});
+
+listener.onUpgraded((event) => {
+  console.log(`Upgraded: v${event.old_version} -> v${event.new_version}`);
+});
+
+// Start listening (polls every 5 seconds)
+await listener.start();
+
+// Filter by user address
+listener.onDeposit((event) => {
+  console.log(`User deposit: ${event.amount}`);
+}, 'GABC...USER_ADDRESS');
+
+// Stop when done
+listener.stop();
+```
+
+**Available handler methods:**
+
+| Method | Event Type | User Filter |
+|---|---|---|
+| `onDeposit` | `DepositEvent` | Optional |
+| `onWithdraw` | `WithdrawEvent` | Optional |
+| `onRebalance` | `RebalanceEvent` | - |
+| `onRebalanceFailed` | `RebalanceFailedEvent` | - |
+| `onProtocolChanged` | `ProtocolChangedEvent` | - |
+| `onInitialized` | `VaultInitializedEvent` | - |
+| `onPaused` | `VaultPausedEvent` | - |
+| `onUnpaused` | `VaultUnpausedEvent` | - |
+| `onEmergencyPaused` | `EmergencyPausedEvent` | - |
+| `onTvlCapUpdated` | `TvlCapUpdatedEvent` | - |
+| `onUserDepositCapUpdated` | `UserDepositCapUpdatedEvent` | - |
+| `onCapsUpdated` | `CapsUpdatedEvent` | - |
+| `onLimitsUpdated` | `LimitsUpdatedEvent` | - |
+| `onDepositLimitsUpdated` | `DepositLimitsUpdatedEvent` | - |
+| `onAgentUpdated` | `AgentUpdatedEvent` | - |
+| `onAgentUpdateProposed` | `AgentUpdateProposedEvent` | - |
+| `onAgentUpdateConfirmed` | `AgentUpdateConfirmedEvent` | - |
+| `onAgentUpdateCancelled` | `AgentUpdateCancelledEvent` | - |
+| `onOwnershipInitiated` | `OwnershipTransferInitiatedEvent` | - |
+| `onOwnershipTransferred` | `OwnershipTransferredEvent` | - |
+| `onOwnershipCancelled` | `OwnershipTransferCancelledEvent` | - |
+| `onAssetsUpdated` | `AssetsUpdatedEvent` | - |
+| `onUpgraded` | `UpgradedEvent` | - |
+| `onUpgradeScheduled` | `UpgradeScheduledEvent` | - |
+| `onUpgradeCancelled` | `UpgradeCancelledEvent` | - |
+| `onBlendSupply` | `BlendSupplyEvent` | - |
+| `onBlendWithdraw` | `BlendWithdrawEvent` | - |
+| `onBlendPoolConfigured` | `BlendPoolConfiguredEvent` | - |
+| `onDexSupply` | `DexSupplyEvent` | - |
+| `onDexWithdraw` | `DexWithdrawEvent` | - |
+| `onDexPoolConfigured` | `DexPoolConfiguredEvent` | - |
+| `onUserStrategyUpdated` | `UserStrategyUpdatedEvent` | Optional |
+
 ---
 
 ## Regenerating the client
@@ -289,6 +379,7 @@ packages/vault-client/
 ├── README.md
 └── src/
     ├── index.ts                  ← public barrel export
+    ├── event-listener.ts         ← VaultEventListener for Soroban event streaming
     └── generated/
         └── vault.ts              ← AUTO-GENERATED, do not edit
 ```

@@ -94,123 +94,123 @@ export interface RebalanceEvent {
 
 /** Emitted by the contract. */
 export interface ProtocolChangedEvent {
-  /** Field old_protocol */
+  /** Protocol the vault was deployed to before the change (`"blend"`, `"dex"`, or `"none"`) */
   old_protocol: string;
-  /** Field new_protocol */
+  /** Protocol the vault is deployed to after the change (`"blend"`, `"dex"`, or `"none"`) */
   new_protocol: string;
 }
 
 /** Emitted by the contract. */
 export interface PauseEvent {
-  /** True if vault is now paused, false if unpaused */
+  /** `true` if the vault is now paused, `false` if it is now unpaused */
   paused: boolean;
-  /** Address that triggered the pause/unpause */
+  /** Address that triggered the pause/unpause transition */
   caller: string;
 }
 
 /** Emitted by the contract. */
 export interface VaultInitializedEvent {
-  /** Field owner */
+  /** Initial owner address, authorized for every administrative entrypoint (pause, caps, pool configuration, upgrades, ownership transfer) */
   owner: string;
-  /** Field agent */
+  /** Authorized AI agent address; the only address allowed to call `rebalance` and `update_total_assets` */
   agent: string;
-  /** Field usdc_token */
+  /** USDC token contract address; the only token the vault accepts */
   usdc_token: string;
-  /** Field tvl_cap */
+  /** TVL cap applied at initialization, in USDC raw units (7 decimals) */
   tvl_cap: bigint;
 }
 
 /** Emitted by the contract. */
 export interface InitFailedEvent {
-  /** Field caller */
+  /** Address that attempted the initialization */
   caller: string;
-  /** Field reason */
+  /** Short reason code describing why initialization was rejected */
   reason: string;
 }
 
 /** Emitted by the contract. */
 export interface VaultPausedEvent {
-  /** Field owner */
+  /** Owner address that triggered the pause (read from storage, not the caller argument) */
   owner: string;
 }
 
 /** Emitted by the contract. */
 export interface VaultUnpausedEvent {
-  /** Field owner */
+  /** Owner address that triggered the unpause (read from storage, not the caller argument) */
   owner: string;
 }
 
 /** Emitted by the contract. */
 export interface EmergencyPausedEvent {
-  /** Field owner */
+  /** Owner address that triggered the emergency pause (read from storage, not the caller argument) */
   owner: string;
 }
 
 /** Emitted by the contract. */
 export interface TvlCapUpdatedEvent {
-  /** Field old_cap */
+  /** TVL cap before the change, in USDC raw units (7 decimals) */
   old_cap: bigint;
-  /** Field new_cap */
+  /** TVL cap after the change, in USDC raw units (7 decimals) */
   new_cap: bigint;
 }
 
 /** Emitted by the contract. */
 export interface UserDepositCapUpdatedEvent {
-  /** Field old_cap */
+  /** Per-user deposit cap before the change, in USDC raw units (7 decimals) */
   old_cap: bigint;
-  /** Field new_cap */
+  /** Per-user deposit cap after the change, in USDC raw units (7 decimals) */
   new_cap: bigint;
 }
 
 /** Emitted by the contract. */
 export interface CapsUpdatedEvent {
-  /** Field old_user_cap */
+  /** Per-user deposit cap before the change, in USDC raw units (7 decimals) */
   old_user_cap: bigint;
-  /** Field new_user_cap */
+  /** Per-user deposit cap after the change, in USDC raw units (7 decimals) */
   new_user_cap: bigint;
-  /** Field old_tvl_cap */
+  /** TVL cap before the change, in USDC raw units (7 decimals) */
   old_tvl_cap: bigint;
-  /** Field new_tvl_cap */
+  /** TVL cap after the change, in USDC raw units (7 decimals) */
   new_tvl_cap: bigint;
 }
 
 /** Emitted by the contract. */
 export interface LimitsUpdatedEvent {
-  /** Field old_min */
+  /** Minimum per-transaction deposit before the change, in USDC raw units (7 decimals) */
   old_min: bigint;
-  /** Field new_min */
+  /** Minimum per-transaction deposit after the change, in USDC raw units (7 decimals) */
   new_min: bigint;
-  /** Field old_max */
+  /** Maximum per-transaction deposit before the change, in USDC raw units (7 decimals) */
   old_max: bigint;
-  /** Field new_max */
+  /** Maximum per-transaction deposit after the change, in USDC raw units (7 decimals) */
   new_max: bigint;
 }
 
 /** Emitted by the contract. */
 export interface DepositLimitsUpdatedEvent {
-  /** Field old_min */
+  /** Minimum per-transaction deposit before the change, in USDC raw units (7 decimals) */
   old_min: bigint;
-  /** Field new_min */
+  /** Minimum per-transaction deposit after the change, in USDC raw units (7 decimals) */
   new_min: bigint;
-  /** Field old_max */
+  /** Maximum per-transaction deposit before the change, in USDC raw units (7 decimals) */
   old_max: bigint;
-  /** Field new_max */
+  /** Maximum per-transaction deposit after the change, in USDC raw units (7 decimals) */
   new_max: bigint;
 }
 
 /** Emitted by the contract. */
 export interface AgentUpdatedEvent {
-  /** Field old_agent */
+  /** Agent address that was authorized before the change */
   old_agent: string;
-  /** Field new_agent */
+  /** Agent address authorized after the change */
   new_agent: string;
 }
 
 /** Emitted by the contract. */
 export interface AgentUpdateProposedEvent {
-  /** Field old_agent */
+  /** Agent address currently authorized; remains active for the whole timelock window */
   old_agent: string;
-  /** Field new_agent */
+  /** Proposed agent address, activated only by `confirm_agent_update` */
   new_agent: string;
   /** Ledger at which `confirm_agent_update()` becomes callable. */
   effective_ledger: number;
@@ -218,49 +218,49 @@ export interface AgentUpdateProposedEvent {
 
 /** Emitted by the contract. */
 export interface AgentUpdateConfirmedEvent {
-  /** Field old_agent */
+  /** Agent address that was authorized before confirmation */
   old_agent: string;
-  /** Field new_agent */
+  /** Agent address now authorized to call `rebalance` and `update_total_assets` */
   new_agent: string;
 }
 
 /** Emitted by the contract. */
 export interface AgentUpdateCancelledEvent {
-  /** Field old_agent */
+  /** Agent address that stays authorized; cancelling never changes the active agent */
   old_agent: string;
-  /** Field proposed_new_agent */
+  /** Agent address that had been proposed and is now discarded */
   proposed_new_agent: string;
 }
 
 /** Emitted by the contract. */
 export interface OwnershipTransferInitiatedEvent {
-  /** Field current_owner */
+  /** Owner address that remains in control until the transfer is accepted */
   current_owner: string;
-  /** Field pending_owner */
+  /** Proposed owner address that must call `accept_ownership` to take over */
   pending_owner: string;
 }
 
 /** Emitted by the contract. */
 export interface OwnershipTransferredEvent {
-  /** Field old_owner */
+  /** Owner address that held control before the transfer */
   old_owner: string;
-  /** Field new_owner */
+  /** Owner address now authorized for administrative entrypoints */
   new_owner: string;
 }
 
 /** Emitted by the contract. */
 export interface OwnershipTransferCancelledEvent {
-  /** Field owner */
+  /** Owner address that stays in control; cancelling never changes the owner */
   owner: string;
-  /** Field cancelled_pending */
+  /** Pending owner address that was discarded */
   cancelled_pending: string;
 }
 
 /** Emitted by the contract. */
 export interface AssetsUpdatedEvent {
-  /** Field old_total */
+  /** Total managed assets before the update, in USDC raw units (7 decimals) */
   old_total: bigint;
-  /** Field new_total */
+  /** Total managed assets after the update, in USDC raw units (7 decimals) */
   new_total: bigint;
 }
 
@@ -426,7 +426,7 @@ export const VaultErrorCode = {
   MaximumDepositBelowMinimum: 27,
   /** Caller is not allowed to configure a protocol pool. */
   OnlyOwnerCanConfigurePool: 28,
-  /** Caller is not the pending owner. */
+  /** Caller is not the pending owner (or no pending ownership transfer exists). */
   CallerIsNotPendingOwner: 29,
   /** Caller is not allowed to update total assets. */
   OnlyAgentCanUpdateTotalAssets: 30,
@@ -492,32 +492,35 @@ export const VaultErrorCode = {
 
 export type VaultErrorCode = typeof VaultErrorCode[keyof typeof VaultErrorCode];
 
-/** Typed wrapper for contract-level vault errors. */
-export class VaultError extends Error {
-  code: VaultErrorCode;
 
-  constructor(code: VaultErrorCode, message?: string) {
-    super(message ?? `Vault contract error ${code}`);
-    this.name = 'VaultError';
+/**
+ * Typed error wrapping contract-level VaultError responses.
+ *
+ * Provides a `.code` property with the numeric error code and
+ * preserves the original message.
+ */
+export class VaultError extends Error {
+  readonly code: VaultErrorCode;
+
+  constructor(code: VaultErrorCode, message: string) {
+    super(message);
+    this.name = "VaultError";
     this.code = code;
   }
 
-  static fromContractError(contractError: any): VaultError {
-    const maybeCode = contractError?.code ?? contractError?.value ?? contractError?.errorCode;
-    const maybeMessage = contractError?.message ?? contractError?.error ?? contractError?.detail;
-
-    if (typeof maybeCode === 'number' && Object.values(VaultErrorCode).includes(maybeCode as VaultErrorCode)) {
-      return new VaultError(maybeCode as VaultErrorCode, typeof maybeMessage === 'string' ? maybeMessage : undefined);
+  /**
+   * Build a VaultError from a raw contract error object.
+   * Handles both `{code, message}` shapes and raw string errors.
+   */
+  static fromContractError(error: unknown): VaultError {
+    if (error && typeof error === "object" && "code" in error) {
+      const obj = error as { code: number; message?: string };
+      return new VaultError(obj.code as VaultErrorCode, obj.message ?? String(obj.code));
     }
-
-    if (typeof maybeCode === 'string') {
-      const parsedCode = Number(maybeCode);
-      if (!Number.isNaN(parsedCode) && Object.values(VaultErrorCode).includes(parsedCode as VaultErrorCode)) {
-        return new VaultError(parsedCode as VaultErrorCode, typeof maybeMessage === 'string' ? maybeMessage : undefined);
-      }
+    if (typeof error === "string") {
+      return new VaultError(0 as VaultErrorCode, error);
     }
-
-    return new VaultError(VaultErrorCode.ValidationError, typeof maybeMessage === 'string' ? maybeMessage : 'Unknown vault contract error');
+    return new VaultError(0 as VaultErrorCode, String(error));
   }
 }
 

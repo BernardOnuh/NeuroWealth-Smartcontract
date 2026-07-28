@@ -1484,12 +1484,12 @@
         {
           "name": "old_protocol",
           "type": "Symbol",
-          "description": "Field old_protocol"
+          "description": "Protocol the vault was deployed to before the change (`\"blend\"`, `\"dex\"`, or `\"none\"`)"
         },
         {
           "name": "new_protocol",
           "type": "Symbol",
-          "description": "Field new_protocol"
+          "description": "Protocol the vault is deployed to after the change (`\"blend\"`, `\"dex\"`, or `\"none\"`)"
         }
       ]
     },
@@ -1501,12 +1501,12 @@
         {
           "name": "paused",
           "type": "bool",
-          "description": "True if vault is now paused, false if unpaused"
+          "description": "`true` if the vault is now paused, `false` if it is now unpaused"
         },
         {
           "name": "caller",
           "type": "Address",
-          "description": "Address that triggered the pause/unpause"
+          "description": "Address that triggered the pause/unpause transition"
         }
       ]
     },
@@ -1518,22 +1518,22 @@
         {
           "name": "owner",
           "type": "Address",
-          "description": "Field owner"
+          "description": "Initial owner address, authorized for every administrative entrypoint (pause, caps, pool configuration, upgrades, ownership transfer)"
         },
         {
           "name": "agent",
           "type": "Address",
-          "description": "Field agent"
+          "description": "Authorized AI agent address; the only address allowed to call `rebalance` and `update_total_assets`"
         },
         {
           "name": "usdc_token",
           "type": "Address",
-          "description": "Field usdc_token"
+          "description": "USDC token contract address; the only token the vault accepts"
         },
         {
           "name": "tvl_cap",
           "type": "i128",
-          "description": "Field tvl_cap"
+          "description": "TVL cap applied at initialization, in USDC raw units (7 decimals)"
         }
       ]
     },
@@ -1545,12 +1545,12 @@
         {
           "name": "caller",
           "type": "Address",
-          "description": "Field caller"
+          "description": "Address that attempted the initialization"
         },
         {
           "name": "reason",
           "type": "Symbol",
-          "description": "Field reason"
+          "description": "Short reason code describing why initialization was rejected"
         }
       ]
     },
@@ -1562,7 +1562,7 @@
         {
           "name": "owner",
           "type": "Address",
-          "description": "Field owner"
+          "description": "Owner address that triggered the pause (read from storage, not the caller argument)"
         }
       ]
     },
@@ -1574,7 +1574,7 @@
         {
           "name": "owner",
           "type": "Address",
-          "description": "Field owner"
+          "description": "Owner address that triggered the unpause (read from storage, not the caller argument)"
         }
       ]
     },
@@ -1586,7 +1586,7 @@
         {
           "name": "owner",
           "type": "Address",
-          "description": "Field owner"
+          "description": "Owner address that triggered the emergency pause (read from storage, not the caller argument)"
         }
       ]
     },
@@ -1598,12 +1598,12 @@
         {
           "name": "old_cap",
           "type": "i128",
-          "description": "Field old_cap"
+          "description": "TVL cap before the change, in USDC raw units (7 decimals)"
         },
         {
           "name": "new_cap",
           "type": "i128",
-          "description": "Field new_cap"
+          "description": "TVL cap after the change, in USDC raw units (7 decimals)"
         }
       ]
     },
@@ -1615,12 +1615,12 @@
         {
           "name": "old_cap",
           "type": "i128",
-          "description": "Field old_cap"
+          "description": "Per-user deposit cap before the change, in USDC raw units (7 decimals)"
         },
         {
           "name": "new_cap",
           "type": "i128",
-          "description": "Field new_cap"
+          "description": "Per-user deposit cap after the change, in USDC raw units (7 decimals)"
         }
       ]
     },
@@ -1632,22 +1632,22 @@
         {
           "name": "old_user_cap",
           "type": "i128",
-          "description": "Field old_user_cap"
+          "description": "Per-user deposit cap before the change, in USDC raw units (7 decimals)"
         },
         {
           "name": "new_user_cap",
           "type": "i128",
-          "description": "Field new_user_cap"
+          "description": "Per-user deposit cap after the change, in USDC raw units (7 decimals)"
         },
         {
           "name": "old_tvl_cap",
           "type": "i128",
-          "description": "Field old_tvl_cap"
+          "description": "TVL cap before the change, in USDC raw units (7 decimals)"
         },
         {
           "name": "new_tvl_cap",
           "type": "i128",
-          "description": "Field new_tvl_cap"
+          "description": "TVL cap after the change, in USDC raw units (7 decimals)"
         }
       ]
     },
@@ -1659,22 +1659,22 @@
         {
           "name": "old_min",
           "type": "i128",
-          "description": "Field old_min"
+          "description": "Minimum per-transaction deposit before the change, in USDC raw units (7 decimals)"
         },
         {
           "name": "new_min",
           "type": "i128",
-          "description": "Field new_min"
+          "description": "Minimum per-transaction deposit after the change, in USDC raw units (7 decimals)"
         },
         {
           "name": "old_max",
           "type": "i128",
-          "description": "Field old_max"
+          "description": "Maximum per-transaction deposit before the change, in USDC raw units (7 decimals)"
         },
         {
           "name": "new_max",
           "type": "i128",
-          "description": "Field new_max"
+          "description": "Maximum per-transaction deposit after the change, in USDC raw units (7 decimals)"
         }
       ]
     },
@@ -1686,22 +1686,22 @@
         {
           "name": "old_min",
           "type": "i128",
-          "description": "Field old_min"
+          "description": "Minimum per-transaction deposit before the change, in USDC raw units (7 decimals)"
         },
         {
           "name": "new_min",
           "type": "i128",
-          "description": "Field new_min"
+          "description": "Minimum per-transaction deposit after the change, in USDC raw units (7 decimals)"
         },
         {
           "name": "old_max",
           "type": "i128",
-          "description": "Field old_max"
+          "description": "Maximum per-transaction deposit before the change, in USDC raw units (7 decimals)"
         },
         {
           "name": "new_max",
           "type": "i128",
-          "description": "Field new_max"
+          "description": "Maximum per-transaction deposit after the change, in USDC raw units (7 decimals)"
         }
       ]
     },
@@ -1713,12 +1713,12 @@
         {
           "name": "old_agent",
           "type": "Address",
-          "description": "Field old_agent"
+          "description": "Agent address that was authorized before the change"
         },
         {
           "name": "new_agent",
           "type": "Address",
-          "description": "Field new_agent"
+          "description": "Agent address authorized after the change"
         }
       ]
     },
@@ -1730,12 +1730,12 @@
         {
           "name": "old_agent",
           "type": "Address",
-          "description": "Field old_agent"
+          "description": "Agent address currently authorized; remains active for the whole timelock window"
         },
         {
           "name": "new_agent",
           "type": "Address",
-          "description": "Field new_agent"
+          "description": "Proposed agent address, activated only by `confirm_agent_update`"
         },
         {
           "name": "effective_ledger",
@@ -1752,12 +1752,12 @@
         {
           "name": "old_agent",
           "type": "Address",
-          "description": "Field old_agent"
+          "description": "Agent address that was authorized before confirmation"
         },
         {
           "name": "new_agent",
           "type": "Address",
-          "description": "Field new_agent"
+          "description": "Agent address now authorized to call `rebalance` and `update_total_assets`"
         }
       ]
     },
@@ -1769,12 +1769,12 @@
         {
           "name": "old_agent",
           "type": "Address",
-          "description": "Field old_agent"
+          "description": "Agent address that stays authorized; cancelling never changes the active agent"
         },
         {
           "name": "proposed_new_agent",
           "type": "Address",
-          "description": "Field proposed_new_agent"
+          "description": "Agent address that had been proposed and is now discarded"
         }
       ]
     },
@@ -1786,12 +1786,12 @@
         {
           "name": "current_owner",
           "type": "Address",
-          "description": "Field current_owner"
+          "description": "Owner address that remains in control until the transfer is accepted"
         },
         {
           "name": "pending_owner",
           "type": "Address",
-          "description": "Field pending_owner"
+          "description": "Proposed owner address that must call `accept_ownership` to take over"
         }
       ]
     },
@@ -1803,12 +1803,12 @@
         {
           "name": "old_owner",
           "type": "Address",
-          "description": "Field old_owner"
+          "description": "Owner address that held control before the transfer"
         },
         {
           "name": "new_owner",
           "type": "Address",
-          "description": "Field new_owner"
+          "description": "Owner address now authorized for administrative entrypoints"
         }
       ]
     },
@@ -1820,12 +1820,12 @@
         {
           "name": "owner",
           "type": "Address",
-          "description": "Field owner"
+          "description": "Owner address that stays in control; cancelling never changes the owner"
         },
         {
           "name": "cancelled_pending",
           "type": "Address",
-          "description": "Field cancelled_pending"
+          "description": "Pending owner address that was discarded"
         }
       ]
     },
@@ -1837,12 +1837,12 @@
         {
           "name": "old_total",
           "type": "i128",
-          "description": "Field old_total"
+          "description": "Total managed assets before the update, in USDC raw units (7 decimals)"
         },
         {
           "name": "new_total",
           "type": "i128",
-          "description": "Field new_total"
+          "description": "Total managed assets after the update, in USDC raw units (7 decimals)"
         }
       ]
     },
@@ -2179,7 +2179,7 @@
     },
     "VaultError::CallerIsNotPendingOwner": {
       "code": 29,
-      "description": "Caller is not the pending owner."
+      "description": "Caller is not the pending owner (or no pending ownership transfer exists)."
     },
     "VaultError::OnlyAgentCanUpdateTotalAssets": {
       "code": 30,

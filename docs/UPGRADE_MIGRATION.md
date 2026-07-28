@@ -270,7 +270,34 @@ Use this practical checklist for every upgrade.
 
 ---
 
-## 8. Mainnet Upgrade Procedure
+## 8. Automated Verification Scripts
+
+The repository includes scripts to verify key invariants before and after upgrades. Run these as part of your CI pipeline or manual upgrade validation.
+
+### Balance Deprecation Check
+
+```bash
+bash scripts/check-balance-deprecation.sh
+```
+
+Verifies that the deprecated `DataKey::Balance(Address)` variant:
+- Exists at discriminant 0 (preserving storage layout)
+- Is documented as deprecated
+- Is not used in any production code path
+- All test/fuzz references use `TokenDataKey::Balance` (mock), not `DataKey::Balance`
+- `get_balance` derives values from shares, not from storage
+
+### Access Control Table Check
+
+```bash
+bash scripts/check-access-control.sh
+```
+
+Cross-references the access control table in `SECURITY.md` against `contract-spec.json` to ensure every state-changing function is documented with the correct access level (owner, agent, user, pending-owner, anyone).
+
+---
+
+## 9. Mainnet Upgrade Procedure
 
 Recommended production flow for upgrading the vault under the timelock architecture:
 
@@ -287,7 +314,7 @@ Recommended production flow for upgrading the vault under the timelock architect
 
 ---
 
-## 9. Common Mistakes
+## 10. Common Mistakes
 
 **Mistake:** Removing a `DataKey` variant entirely from the enum.
 **Result:** Orphaned storage. The data still exists on the ledger, consuming rent/deposits, but the contract completely lacks the type definitions to ever access or delete it.
@@ -300,7 +327,7 @@ Recommended production flow for upgrading the vault under the timelock architect
 
 ---
 
-## 10. Example DataKey Evolution
+## 11. Example DataKey Evolution
 
 **Version 1 (Initial):**
 ```rust
