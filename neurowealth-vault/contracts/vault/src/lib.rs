@@ -361,6 +361,25 @@ pub enum DataKey {
     PendingUpgradeHash,
     /// Ledger sequence at which the pending upgrade becomes executable (#316).
     UpgradeTimelockExpiry,
+    /// Owner-configurable circuit-breaker threshold (#439).
+    ///
+    /// The number of consecutive failed rebalances that trips an automatic
+    /// emergency pause. Falls back to [`DEFAULT_MAX_CONSECUTIVE_FAILURES`] when
+    /// unset (e.g. instances initialized before the circuit breaker existed).
+    MaxConsecutiveFailures,
+    /// Running count of consecutive failed rebalances (#439).
+    ///
+    /// Incremented on every `"failed"` rebalance and reset to `0` on any
+    /// `"success"`. When it reaches [`DataKey::MaxConsecutiveFailures`] the vault
+    /// auto-pauses.
+    ConsecutiveFailures,
+    /// Append-only index of addresses that have ever held non-zero shares (#440).
+    ///
+    /// Stored as a `Vec<Address>` in instance storage so it shares the vault
+    /// instance's lifetime. Read by `get_users_with_shares` for indexer
+    /// pagination; entries are never removed, so fully-withdrawn users leave a
+    /// stale slot that is filtered out at read time.
+    UserSharesIndex,
 }
 
 // ============================================================================
@@ -916,8 +935,6 @@ struct BlendRequest {
 
 const BLEND_REQUEST_TYPE_SUPPLY: u32 = 0;
 const BLEND_REQUEST_TYPE_WITHDRAW: u32 = 1;
-#[allow(dead_code)]
-const DEFAULT_TVL_CAP: i128 = 100_000_000_000_i128;
 const DEFAULT_USER_DEPOSIT_CAP: i128 = 10_000_000_000_i128;
 const DEFAULT_MIN_DEPOSIT: i128 = 1_000_000_i128;
 const DEFAULT_MAX_DEPOSIT: i128 = 10_000_000_000_i128;
@@ -926,6 +943,11 @@ const DEFAULT_MAX_DEPOSIT: i128 = 10_000_000_000_i128;
 pub(crate) const DEFAULT_APPROVAL_TTL: u32 = 100_000;
 const MIN_APPROVAL_TTL: u32 = 1_000;
 const MAX_APPROVAL_TTL: u32 = 500_000;
+
+/// Default circuit-breaker threshold (#439): the number of consecutive failed
+/// rebalances that trips an automatic emergency pause when the owner has not
+/// configured a value via `set_max_consecutive_failures`.
+const DEFAULT_MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
 /// Minimum ledger delay before a proposed agent update can be confirmed (~24 h on Stellar mainnet).
 /// 17,280 ledgers × ~5 s per ledger ≈ 86,400 s = 24 h.
@@ -1299,6 +1321,10 @@ impl NeuroWealthVault {
         env.storage()
             .instance()
             .set(&DataKey::BlendApprovalTtl, &DEFAULT_BLEND_APPROVAL_TTL);
+        env.storage().instance().set(
+            &DataKey::MaxConsecutiveFailures,
+            &DEFAULT_MAX_CONSECUTIVE_FAILURES,
+        );
         env.storage().instance().set(&DataKey::Version, &1_u32);
 
         env.events().publish(
@@ -1401,6 +1427,15 @@ impl NeuroWealthVault {
                 .checked_add(shares_to_mint)
                 .expect("vault: shares overflow")),
         );
+
+        // Register the user in the active-share index the first time they hold
+        // non-zero shares, so the `get_users_with_shares` indexer view can page
+        // over holders (Issue #440). The `current_shares == 0` gate also covers a
+        // user who fully withdrew earlier and is re-entering; `add_to_user_index`
+        // dedupes so their slot is not duplicated.
+        if current_shares == 0 {
+            Self::add_to_user_index(&env, &user);
+        }
 
         // Set default strategy for first-time depositors
         if current_shares == 0
@@ -1938,13 +1973,17 @@ impl NeuroWealthVault {
                 RebalanceEvent {
                     protocol,
                     expected_apy,
-                    status,
+                    status: status.clone(),
                     amount_attempted,
                     amount_moved,
                     amount_supplied,
                     amount_withdrawn,
                 },
             );
+
+            // Circuit breaker: fold this outcome into the consecutive-failure
+            // counter, auto-pausing the vault if the threshold is reached (#439).
+            Self::record_rebalance_outcome(&env, &status);
         } else if protocol == symbol_short!("dex") {
             if !env.storage().instance().has(&DataKey::DexPool) {
                 panic_with_error!(&env, VaultError::DexPoolNotConfigured);
@@ -1979,13 +2018,17 @@ impl NeuroWealthVault {
                 RebalanceEvent {
                     protocol,
                     expected_apy,
-                    status,
+                    status: status.clone(),
                     amount_attempted,
                     amount_moved,
                     amount_supplied,
                     amount_withdrawn,
                 },
             );
+
+            // Circuit breaker: fold this outcome into the consecutive-failure
+            // counter, auto-pausing the vault if the threshold is reached (#439).
+            Self::record_rebalance_outcome(&env, &status);
         } else if protocol == symbol_short!("none") {
             let mut status = symbol_short!("success");
 
@@ -2021,13 +2064,17 @@ impl NeuroWealthVault {
                 RebalanceEvent {
                     protocol,
                     expected_apy,
-                    status,
+                    status: status.clone(),
                     amount_attempted,
                     amount_moved,
                     amount_supplied,
                     amount_withdrawn,
                 },
             );
+
+            // Circuit breaker: fold this outcome into the consecutive-failure
+            // counter, auto-pausing the vault if the threshold is reached (#439).
+            Self::record_rebalance_outcome(&env, &status);
         }
 
         // Persist the ledger of this successful rebalance so the next call can
@@ -2613,6 +2660,93 @@ impl NeuroWealthVault {
             .unwrap_or(0)
     }
 
+    /// Sets the circuit-breaker threshold: the number of **consecutive** failed
+    /// rebalances that trips an automatic emergency pause (Issue #439).
+    ///
+    /// Only the owner can call this. The counter increments on every rebalance
+    /// that completes with a `"failed"` status and resets to zero on any
+    /// `"success"`. Once the counter reaches `threshold`, `rebalance` pauses the
+    /// vault (reusing the emergency-pause flag) and emits an
+    /// [`EmergencyPausedEvent`]. The owner must `unpause` to resume operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    /// * `threshold` - Consecutive failures that trip the breaker. Must be `>= 1`.
+    ///
+    /// # Returns
+    ///
+    /// None.
+    ///
+    /// # Events
+    ///
+    /// None. This is configuration-only; read the effective value back with
+    /// [`get_max_consecutive_failures`](crate::NeuroWealthVault::get_max_consecutive_failures).
+    ///
+    /// # Panics
+    ///
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    /// - [`VaultError::CallerIsNotOwner`] if the caller is not the stored owner.
+    /// - [`VaultError::InvalidStrategy`] if `threshold` is `0`. The error enum is
+    ///   at Soroban's 50-variant limit, so `InvalidStrategy` is reused for
+    ///   invalid configuration input (mirroring `rebalance`).
+    pub fn set_max_consecutive_failures(env: Env, threshold: u32) {
+        Self::require_initialized(&env);
+        Self::require_is_owner(&env);
+        Self::require(&env, threshold >= 1, VaultError::InvalidStrategy);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxConsecutiveFailures, &threshold);
+    }
+
+    /// Returns the configured circuit-breaker threshold (Issue #439), or
+    /// [`DEFAULT_MAX_CONSECUTIVE_FAILURES`] when the owner has not set one.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    ///
+    /// # Returns
+    /// The consecutive-failure threshold that trips the auto-pause.
+    ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Panics
+    ///
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    pub fn get_max_consecutive_failures(env: Env) -> u32 {
+        Self::require_initialized(&env);
+        Self::effective_max_consecutive_failures(&env)
+    }
+
+    /// Returns the current count of consecutive failed rebalances (Issue #439).
+    ///
+    /// Resets to `0` after any successful rebalance. Useful for monitoring how
+    /// close the vault is to the auto-pause threshold.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    ///
+    /// # Returns
+    /// The number of consecutive failed rebalances since the last success.
+    ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Panics
+    ///
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    pub fn get_consecutive_failures(env: Env) -> u32 {
+        Self::require_initialized(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::ConsecutiveFailures)
+            .unwrap_or(0)
+    }
+
     /// Sets the shared lifetime, in ledgers, of the token approvals the vault
     /// grants to external protocols.
     ///
@@ -3163,14 +3297,20 @@ impl NeuroWealthVault {
             VaultError::OnlyOwnerCanConfigurePool,
         );
 
+        // Idempotent no-op guard (Issue #438): if the Blend pool is already set
+        // to this exact address, skip the interface probe, the storage write, and
+        // the event so a redundant re-configuration emits nothing at all.
+        let old_pool: Option<Address> = env.storage().instance().get(&DataKey::BlendPool);
+        if old_pool.as_ref() == Some(&pool_address) {
+            return;
+        }
+
         // Validate pool interface by probing the `balance` function (Issue #148).
         // If the address is not a valid Blend pool contract the invocation will
         // panic here, rejecting the registration before the address is stored.
         let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
         let vault_address = env.current_contract_address();
         BlendPoolClient::get_balance(&env, &pool_address, &usdc_token, &vault_address);
-
-        let old_pool: Option<Address> = env.storage().instance().get(&DataKey::BlendPool);
 
         env.storage()
             .instance()
@@ -3225,14 +3365,20 @@ impl NeuroWealthVault {
             VaultError::OnlyOwnerCanConfigurePool,
         );
 
+        // Idempotent no-op guard (Issue #438): if the DEX pool is already set to
+        // this exact address, skip the interface probe, the storage write, and the
+        // event so a redundant re-configuration emits nothing at all.
+        let old_pool: Option<Address> = env.storage().instance().get(&DataKey::DexPool);
+        if old_pool.as_ref() == Some(&pool_address) {
+            return;
+        }
+
         // Validate the pool interface by probing the `balance` function. If the
         // address is not a valid DEX pool contract the invocation panics here,
         // rejecting the registration before the address is stored.
         let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
         let vault_address = env.current_contract_address();
         DexPoolClient::get_balance(&env, &pool_address, &usdc_token, &vault_address);
-
-        let old_pool: Option<Address> = env.storage().instance().get(&DataKey::DexPool);
 
         env.storage()
             .instance()
@@ -3882,6 +4028,81 @@ impl NeuroWealthVault {
             .unwrap_or(0_i128)
     }
 
+    /// Records `user` in the active-share index the first time they hold
+    /// non-zero shares (Issue #440).
+    ///
+    /// The index is an append-only `Vec<Address>` in instance storage. Entries
+    /// are never removed, so a user who fully withdraws keeps their slot; the
+    /// `contains` guard keeps the index duplicate-free when such a user later
+    /// re-deposits. `get_users_with_shares` filters the stale zero-share slots
+    /// out at read time. See that function for the pagination trade-off.
+    fn add_to_user_index(env: &Env, user: &Address) {
+        let mut index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::UserSharesIndex)
+            .unwrap_or_else(|| Vec::new(env));
+        if !index.contains(user) {
+            index.push_back(user.clone());
+            env.storage()
+                .instance()
+                .set(&DataKey::UserSharesIndex, &index);
+        }
+    }
+
+    /// Returns the effective circuit-breaker threshold (Issue #439), falling
+    /// back to [`DEFAULT_MAX_CONSECUTIVE_FAILURES`] for instances initialized
+    /// before the circuit breaker existed.
+    fn effective_max_consecutive_failures(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MaxConsecutiveFailures)
+            .unwrap_or(DEFAULT_MAX_CONSECUTIVE_FAILURES)
+    }
+
+    /// Folds a rebalance outcome into the consecutive-failure circuit breaker
+    /// (Issue #439).
+    ///
+    /// A `"failed"` status increments the counter; a `"success"` status resets
+    /// it to zero. `"partial"` and `"noop"` outcomes leave the counter
+    /// unchanged. When the counter reaches
+    /// [`DataKey::MaxConsecutiveFailures`] the vault auto-pauses by setting the
+    /// shared [`DataKey::Paused`] flag and emitting the existing
+    /// [`EmergencyPausedEvent`]. The pause is applied at most once per trip: if
+    /// the vault is already paused no duplicate event is emitted.
+    fn record_rebalance_outcome(env: &Env, status: &Symbol) {
+        if *status == symbol_short!("failed") {
+            let failures = env
+                .storage()
+                .instance()
+                .get::<DataKey, u32>(&DataKey::ConsecutiveFailures)
+                .unwrap_or(0)
+                .saturating_add(1);
+            env.storage()
+                .instance()
+                .set(&DataKey::ConsecutiveFailures, &failures);
+
+            if failures >= Self::effective_max_consecutive_failures(env) {
+                let already_paused: bool = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Paused)
+                    .unwrap_or(false);
+                if !already_paused {
+                    env.storage().instance().set(&DataKey::Paused, &true);
+                    let owner: Address =
+                        env.storage().instance().get(&DataKey::Owner).unwrap();
+                    env.events()
+                        .publish((TOPIC_EMERGENCY_PAUSED,), EmergencyPausedEvent { owner });
+                }
+            }
+        } else if *status == symbol_short!("success") {
+            env.storage()
+                .instance()
+                .set(&DataKey::ConsecutiveFailures, &0_u32);
+        }
+    }
+
     /// Extends the persistent TTL for a user's `Shares` entry when it exists.
     fn extend_user_shares_ttl(env: &Env, user: &Address) {
         let shares_key = DataKey::Shares(user.clone());
@@ -4088,6 +4309,78 @@ impl NeuroWealthVault {
     pub fn get_shares(env: Env, user: Address) -> i128 {
         Self::require_initialized(&env);
         Self::read_shares(&env, &user)
+    }
+
+    /// Returns a paginated slice of `(user, shares)` pairs for holders with a
+    /// positive share balance, for off-chain indexer support (Issue #440).
+    ///
+    /// The vault maintains an append-only index of every address that has ever
+    /// held non-zero shares (populated on deposit; see
+    /// [`add_to_user_index`](crate::NeuroWealthVault::add_to_user_index)).
+    ///
+    /// # Pagination and the stale-entry trade-off
+    ///
+    /// Pagination is applied over the **raw index positions** `[start, start +
+    /// limit)`, and the `shares > 0` filter is applied *within* that window. The
+    /// index is never pruned on withdrawal, so a fully-withdrawn holder keeps its
+    /// slot as a zero-share entry that is filtered out here. This keeps writes
+    /// cheap (deposits only ever append, and only for genuinely new holders) at
+    /// the cost of two documented read-time behaviours:
+    ///
+    /// - A page may return **fewer than `limit`** entries (or even be empty) while
+    ///   later pages still hold results, because stale slots occupy positions.
+    /// - Callers walk pages by advancing `start` by `limit` until an empty index
+    ///   window is returned (i.e. `start >= total index length`), not until a
+    ///   short page is seen.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    /// * `start` - Zero-based index offset to begin the page at.
+    /// * `limit` - Maximum number of index slots to scan for this page.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<(Address, i128)>` of holders in `[start, start + limit)` whose
+    /// share balance is strictly positive. Empty when `limit == 0` or `start` is
+    /// beyond the end of the index.
+    ///
+    /// # Events
+    ///
+    /// None.
+    ///
+    /// # Panics
+    ///
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    pub fn get_users_with_shares(env: Env, start: u32, limit: u32) -> Vec<(Address, i128)> {
+        Self::require_initialized(&env);
+
+        let mut result: Vec<(Address, i128)> = Vec::new(&env);
+        if limit == 0 {
+            return result;
+        }
+
+        let index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::UserSharesIndex)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let len = index.len();
+        if start >= len {
+            return result;
+        }
+        let end = core::cmp::min(start.saturating_add(limit), len);
+
+        for i in start..end {
+            let user = index.get(i).unwrap();
+            let shares = Self::read_shares(&env, &user);
+            if shares > 0 {
+                result.push_back((user, shares));
+            }
+        }
+
+        result
     }
 
     /// Extends the persistent TTL for a user's `Shares` entry.
