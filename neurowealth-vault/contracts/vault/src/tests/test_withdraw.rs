@@ -125,7 +125,7 @@ fn test_withdraw_with_no_balance_panics() {
 }
 
 #[test]
-fn test_withdraw_all_returns_correct_amount() {
+fn test_withdraw_all_detailed_invariants() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -137,12 +137,19 @@ fn test_withdraw_all_returns_correct_amount() {
 
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
 
-    let expected_balance = client.get_balance(&user);
+    let original_shares = client.get_shares(&user);
+    let original_total_shares = client.get_total_shares();
+    let original_total_assets = client.get_total_assets();
+    
+    let expected_usdc = client.convert_to_assets(&original_shares);
+    
     let withdrawn = client.withdraw_all(&user);
 
-    assert_eq!(withdrawn, expected_balance);
-    assert_eq!(client.get_shares(&user), 0);
-    assert_eq!(client.get_balance(&user), 0);
+    assert_eq!(client.get_shares(&user), 0, "After withdraw_all, user shares are exactly 0");
+    assert_eq!(client.get_balance(&user), 0, "After withdraw_all, user balance is exactly 0");
+    assert_eq!(withdrawn, expected_usdc, "USDC returned equals convert_to_assets(original_shares)");
+    assert_eq!(client.get_total_shares(), original_total_shares - original_shares, "total_shares decreases by exactly original shares");
+    assert_eq!(client.get_total_assets(), original_total_assets - withdrawn, "total_assets decreases by exactly USDC returned");
 }
 
 #[test]
