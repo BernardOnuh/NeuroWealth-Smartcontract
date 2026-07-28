@@ -13,6 +13,8 @@
 //! - Removing `require_within_tvl_cap` from `deposit()` would cause the
 //!   non-panic tests to fail their post-condition assertions.
 
+extern crate std;
+
 use super::utils::*;
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
