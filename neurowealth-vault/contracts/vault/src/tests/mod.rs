@@ -50,4 +50,5 @@ mod test_users_with_shares;
 mod test_withdraw;
 mod test_yield;
 mod test_multi_user_concurrent;
+mod test_security_agent_drain;
 mod utils;
