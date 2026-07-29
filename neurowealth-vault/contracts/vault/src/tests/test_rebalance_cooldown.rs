@@ -252,6 +252,27 @@ fn test_rebalance_within_cooldown_panics() {
     client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
 }
 
+/// Calling harvest twice in the same ledger when cooldown == 1 panics with
+/// `RebalanceCooldownActive` (Error(Contract, #43)).
+#[test]
+#[should_panic(expected = "Error(Contract, #43)")]
+fn test_harvest_within_cooldown_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner) = setup_vault(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    // Set cooldown to 10 ledgers
+    client.set_rebalance_cooldown(&10_u32);
+
+    // First harvest succeeds and stores the current ledger
+    client.harvest();
+
+    // Immediately attempt a second harvest in the same ledger — must panic
+    client.harvest();
+}
+
 /// `try_rebalance` returns the cooldown error without unwinding the test.
 #[test]
 fn test_rebalance_within_cooldown_returns_error() {
