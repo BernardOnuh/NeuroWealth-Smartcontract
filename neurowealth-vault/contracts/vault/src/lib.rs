@@ -280,6 +280,7 @@ impl VaultError {
     pub const MaxDecreaseOverflow: Self = Self::InvalidStrategy;
     pub const TotalAvailableOverflow: Self = Self::InvalidStrategy;
     pub const VersionOverflow: Self = Self::InvalidStrategy;
+    pub const InvalidWasmHash: Self = Self::InvalidStrategy;
 }
 
 // ============================================================================
@@ -4079,6 +4080,12 @@ impl NeuroWealthVault {
             &env,
             !env.storage().instance().has(&DataKey::PendingUpgradeHash),
             VaultError::TimelockAlreadyPending,
+        );
+
+        Self::require(
+            &env,
+            new_wasm_hash != BytesN::from_array(&env, &[0u8; 32]),
+            VaultError::InvalidWasmHash,
         );
 
         let effective_ledger = env

@@ -107,6 +107,30 @@ fn test_schedule_blocked_while_paused() {
     client.schedule_upgrade(&owner, &fake_hash(&env, 4));
 }
 
+/// Scheduling with a zeroed wasm hash must be rejected (InvalidWasmHash).
+/// The pending upgrade state must remain None after the failed attempt.
+#[test]
+fn test_schedule_zero_hash_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let result = client.try_schedule_upgrade(&owner, &zero_hash);
+    assert_eq!(
+        result,
+        Err(Ok(soroban_sdk::Error::from_contract_error(47))),
+        "zero wasm hash should be rejected with VaultError::InvalidWasmHash"
+    );
+
+    assert!(
+        client.get_pending_upgrade().is_none(),
+        "pending upgrade must remain None after rejected zero hash"
+    );
+}
+
 // ── execute flow ──────────────────────────────────────────────────────────────
 
 /// Executing before the timelock has elapsed must be rejected (TimelockNotExpired, #50).
