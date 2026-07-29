@@ -9,8 +9,11 @@
 //! Also verifies that every user's share-derived balance is non-negative and
 //! that the sum of individual balances stays consistent with total_assets.
 
+extern crate std;
+
 use super::utils::*;
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env};
+use std::vec::Vec;
 
 const MIN_DEPOSIT: i128 = 1_000_000;
 const MAX_DEPOSIT: i128 = 10_000_000_000;

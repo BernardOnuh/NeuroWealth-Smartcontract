@@ -28,6 +28,59 @@ fn test_agent_can_rebalance_with_custom_protocol() {
 }
 
 #[test]
+fn test_rebalance_to_same_blend_protocol_with_zero_idle_balance_is_noop() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+    let blend_client = MockBlendPoolClient::new(&env, &blend_pool);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let user = Address::generate(&env);
+    let deposit_amount = 10_000_000_i128;
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
+
+    client.rebalance(&symbol_short!("blend"), &500_i128, &0_i128);
+
+    assert_eq!(client.get_current_protocol(), symbol_short!("blend"));
+    assert_eq!(token_client.balance(&contract_id), 0_i128);
+    assert_eq!(token_client.balance(&blend_pool), deposit_amount);
+    assert_eq!(blend_client.supplied(&usdc_token), deposit_amount);
+
+    let events_before = env.events().all().len();
+
+    client.rebalance(&symbol_short!("blend"), &500_i128, &0_i128);
+
+    let events_after = find_events_by_topic(env.events().all(), &env, symbol_short!("rebalance"));
+    assert_eq!(
+        events_after.len(),
+        2,
+        "the initial deployment and the noop rebalance should each emit one rebalance event"
+    );
+
+    let (_, _, data) = events_after.last().expect("expected a rebalance event");
+    let event = RebalanceEvent::try_from_val(&env, data).expect("Should be a RebalanceEvent");
+
+    assert_eq!(event.protocol, symbol_short!("blend"));
+    assert_eq!(event.expected_apy, 500_i128);
+    assert_eq!(event.status, symbol_short!("noop"));
+    assert_eq!(event.amount_attempted, 0_i128);
+    assert_eq!(event.amount_moved, 0_i128);
+    assert_eq!(event.amount_supplied, 0_i128);
+    assert_eq!(event.amount_withdrawn, 0_i128);
+
+    assert_eq!(client.get_current_protocol(), symbol_short!("blend"));
+    assert_eq!(token_client.balance(&contract_id), 0_i128);
+    assert_eq!(token_client.balance(&blend_pool), deposit_amount);
+    assert_eq!(blend_client.supplied(&usdc_token), deposit_amount);
+    assert_eq!(env.events().all().len(), events_before + 1);
+}
+
+#[test]
 fn test_owner_can_configure_blend_approval_ttl() {
     let env = Env::default();
     env.mock_all_auths();

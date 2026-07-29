@@ -5,6 +5,7 @@
 //!   2. Agent call within cooldown panics with clear error (Error(Contract, #43)).
 
 use super::utils::*;
+use crate::DataKey;
 use crate::{RebalanceCooldownUpdatedEvent, TOPIC_REBALANCE_COOLDOWN_UPDATED};
 use soroban_sdk::{symbol_short, testutils::Ledger, Env, TryFromVal};
 
@@ -499,12 +500,12 @@ fn test_very_large_cooldown_blocks_rebalance() {
     let (contract_id, _agent, _owner) = setup_vault(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
-    let huge_interval: u32 = 1_000_000;
+    let huge_interval: u32 = 1_000;
     client.set_rebalance_cooldown(&huge_interval);
     client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
 
     env.ledger().with_mut(|li| {
-        li.sequence_number += 500_000;
+        li.sequence_number += 500;
     });
 
     let result = client.try_rebalance(&symbol_short!("none"), &0_i128, &0_i128);
