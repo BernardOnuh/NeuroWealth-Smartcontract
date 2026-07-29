@@ -482,6 +482,18 @@ pub struct RebalanceEvent {
     pub amount_withdrawn: i128,
 }
 
+/// Emitted when accrued yield is harvested and compounded.
+///
+/// # Topics
+/// - `SymbolShort("harvest")` (`TOPIC_HARVEST`) - Event identifier
+#[contracttype]
+pub struct HarvestEvent {
+    /// The protocol harvested from (e.g., "blend", "dex")
+    pub protocol: Symbol,
+    /// Amount withdrawn and re-deposited
+    pub amount_harvested: i128,
+}
+
 /// Emitted when [`DataKey::CurrentProtocol`] changes.
 ///
 /// Indexers should prefer this event over inferring protocol from rebalance
@@ -1043,7 +1055,7 @@ use topics::{
     TOPIC_PAUSED, TOPIC_PROTOCOL_CHANGED, TOPIC_REBALANCE, TOPIC_REBALANCE_COOLDOWN_UPDATED,
     TOPIC_REBALANCE_FAILED, TOPIC_TVL_CAP_UPDATED, TOPIC_UNPAUSED, TOPIC_UPGRADED,
     TOPIC_UPGRADE_CANCELLED, TOPIC_UPGRADE_SCHEDULED, TOPIC_USER_CAP_UPDATED,
-    TOPIC_USER_STRATEGY_UPDATED, TOPIC_WITHDRAW,
+    TOPIC_USER_STRATEGY_UPDATED, TOPIC_WITHDRAW, TOPIC_HARVEST,
 };
 
 impl BlendPoolClient {
@@ -2194,6 +2206,69 @@ impl NeuroWealthVault {
     /// # Panics
     ///
     /// - If the caller is not the owner.
+    pub fn harvest(env: Env, min_out: i128) {
+        Self::require_initialized(&env);
+        Self::require_not_paused(&env);
+        Self::require_is_agent(&env);
+
+        if min_out < 0 {
+            panic_with_error!(&env, VaultError::MinOutMustBeNonNegative);
+        }
+
+        // Cooldown check
+        if let Some(min_interval) = env
+            .storage()
+            .instance()
+            .get::<DataKey, u32>(&DataKey::MinRebalanceInterval)
+        {
+            if min_interval > 0 {
+                if let Some(last_rebalance) = env
+                    .storage()
+                    .instance()
+                    .get::<DataKey, u32>(&DataKey::LastRebalanceLedger)
+                {
+                    let current_ledger = env.ledger().sequence();
+                    let elapsed = current_ledger.saturating_sub(last_rebalance);
+                    if elapsed < min_interval {
+                        panic_with_error!(&env, VaultError::RebalanceCooldownActive);
+                    }
+                }
+            }
+        }
+
+        let current_protocol: Symbol = env
+            .storage()
+            .instance()
+            .get(&DataKey::CurrentProtocol)
+            .unwrap_or(symbol_short!("none"));
+
+        if current_protocol == symbol_short!("none") {
+            panic_with_error!(&env, VaultError::UnsupportedProtocol);
+        }
+
+        let withdrawn = Self::withdraw_from_protocol(&env, &current_protocol, min_out);
+
+        if withdrawn > 0 {
+            if current_protocol == symbol_short!("blend") {
+                Self::supply_to_blend(&env, withdrawn, min_out);
+            } else if current_protocol == symbol_short!("dex") {
+                Self::supply_to_dex(&env, withdrawn, min_out);
+            }
+        }
+
+        env.events().publish(
+            (TOPIC_HARVEST,),
+            HarvestEvent {
+                protocol: current_protocol,
+                amount_harvested: withdrawn,
+            },
+        );
+
+        env.storage()
+            .instance()
+            .set(&DataKey::LastRebalanceLedger, &env.ledger().sequence());
+    }
+
     pub fn pause(env: Env, owner: Address) {
         Self::require_initialized(&env);
         owner.require_auth();
