@@ -208,3 +208,72 @@ fn test_get_pending_agent_update_none_initially() {
         "no pending update should exist initially"
     );
 }
+
+// ─── Issue #513 ──────────────────────────────────────────────────────────────
+
+/// Pins the current behaviour when `confirm_agent_update()` is called well
+/// after the timelock expiry ledger has passed.
+///
+/// The timelock is a *minimum* delay, not a window with an upper deadline.
+/// Advancing many ledgers past `expiry` must still succeed — there is no
+/// `TimelockExpired` guard.
+#[test]
+fn test_confirm_agent_update_long_after_expiry_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _old_agent, _owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let new_agent = Address::generate(&env);
+    client.update_agent(&new_agent);
+
+    let (_, expiry) = client.get_pending_agent_update().unwrap();
+
+    // Advance the ledger 100 000 ledgers past the expiry.
+    env.ledger().set_sequence_number(expiry + 100_000);
+
+    // Must succeed — no upper deadline is enforced.
+    client.confirm_agent_update();
+
+    assert_eq!(
+        client.get_agent(),
+        new_agent,
+        "agent must be updated even when confirmed long after expiry"
+    );
+    assert!(
+        client.get_pending_agent_update().is_none(),
+        "pending state must be cleared after late confirmation"
+    );
+}
+
+// ─── Issue #514 ──────────────────────────────────────────────────────────────
+
+/// `cancel_agent_update()` panics with `NoTimelockPending` (#49) when called
+/// after a previous proposal was already cancelled — the slot is empty again.
+///
+/// This is distinct from the "never-proposed" variant: it verifies that the
+/// cancel path itself clears the pending slot so a second cancel has nothing
+/// to act on.
+#[test]
+#[should_panic(expected = "Error(Contract, #49)")]
+fn test_cancel_agent_update_after_prior_cancel_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let new_agent = Address::generate(&env);
+    // Propose, then cancel — pending slot is now empty.
+    client.update_agent(&new_agent);
+    client.cancel_agent_update();
+
+    assert!(
+        client.get_pending_agent_update().is_none(),
+        "pending state must be empty after first cancel"
+    );
+
+    // Cancelling again with no pending proposal must panic.
+    client.cancel_agent_update();
+}
