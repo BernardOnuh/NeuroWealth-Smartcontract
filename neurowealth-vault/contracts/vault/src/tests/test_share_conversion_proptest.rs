@@ -276,7 +276,7 @@ proptest! {
 
         // Nothing to withdraw if no shares were minted.
         if shares_minted == 0 {
-            return;
+            return Ok(());
         }
 
         // Withdrawal burns shares_ceil(shares_minted, ...) shares.
@@ -334,7 +334,7 @@ proptest! {
             .expect("overflow not possible at tested bounds");
 
         if entitled_assets == 0 {
-            return;
+            return Ok(());
         }
 
         // Withdrawal path: shares_to_burn = ceil(entitled_assets)
