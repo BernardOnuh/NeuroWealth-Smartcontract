@@ -183,6 +183,95 @@ fn test_emergency_pause_emits_event() {
 }
 
 // ============================================================================
+// ISSUE #508: Circuit-breaker auto-pause distinguishable from owner pause
+// ============================================================================
+
+#[test]
+fn test_auto_pause_emits_different_event_than_owner_pause() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // --- Part 1: owner-initiated pause emits VaultPausedEvent (topic "paused") ---
+    let (contract_id, _agent, owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.pause(&owner);
+    assert!(client.is_paused());
+
+    let pause_events = find_events_by_topic(env.events().all(), &env, TOPIC_PAUSED);
+    assert!(
+        !pause_events.is_empty(),
+        "owner pause must emit at least one VaultPausedEvent"
+    );
+    // Verify the last event is a VaultPausedEvent
+    let (_, _, data) = pause_events.last().unwrap();
+    let event = VaultPausedEvent::try_from_val(&env, data)
+        .expect("owner pause event must decode as VaultPausedEvent");
+    assert_eq!(event.owner, owner);
+
+    // Ensure no EmergencyPausedEvent was emitted by this pause
+    let emerg_events_after_pause =
+        find_events_by_topic(env.events().all(), &env, TOPIC_EMERGENCY_PAUSED);
+    assert_eq!(
+        emerg_events_after_pause.len(),
+        0,
+        "owner pause must NOT emit EmergencyPausedEvent"
+    );
+
+    // --- Part 2: circuit-breaker auto-pause emits EmergencyPausedEvent (topic "emerg") ---
+    // Deploy a fresh vault with Blend so the circuit breaker can fire.
+    let (contract_id2, _agent2, owner2, usdc_token2, blend_pool2) =
+        setup_vault_with_token_and_blend(&env);
+    let client2 = NeuroWealthVaultClient::new(&env, &contract_id2);
+    let blend_client = MockBlendPoolClient::new(&env, &blend_pool2);
+
+    client2.set_blend_pool(&owner2, &blend_pool2);
+    blend_client.set_max_supply_limit(&-1_i128); // force every rebalance to "fail"
+
+    let user = Address::generate(&env);
+    mint_and_deposit(&env, &client2, &usdc_token2, &user, 10_000_000_i128);
+
+    // Record events before triggering the circuit breaker.
+    let emerg_before =
+        find_events_by_topic(env.events().all(), &env, TOPIC_EMERGENCY_PAUSED).len();
+
+    // Three consecutive failures trip the default threshold (3).
+    client2.rebalance(&soroban_sdk::symbol_short!("blend"), &500_i128, &0_i128);
+    client2.rebalance(&soroban_sdk::symbol_short!("blend"), &500_i128, &0_i128);
+    client2.rebalance(&soroban_sdk::symbol_short!("blend"), &500_i128, &0_i128);
+    assert!(client2.is_paused(), "circuit breaker must pause the vault");
+
+    // Exactly one new EmergencyPausedEvent must have been emitted.
+    let emerg_events =
+        find_events_by_topic(env.events().all(), &env, TOPIC_EMERGENCY_PAUSED);
+    assert_eq!(
+        emerg_events.len(),
+        emerg_before + 1,
+        "circuit-breaker auto-pause must emit exactly one EmergencyPausedEvent"
+    );
+    let (_, _, data) = emerg_events.last().unwrap();
+    let event = EmergencyPausedEvent::try_from_val(&env, data)
+        .expect("auto-pause event must decode as EmergencyPausedEvent");
+    assert_eq!(event.owner, owner2);
+
+    // Ensure no VaultPausedEvent was emitted by the circuit breaker.
+    let pause_events_after_circuit =
+        find_events_by_topic(env.events().all(), &env, TOPIC_PAUSED);
+    // The owner2 vault has no pause events (we only called rebalance, not pause).
+    assert_eq!(
+        pause_events_after_circuit.len(),
+        0,
+        "circuit-breaker auto-pause must NOT emit VaultPausedEvent"
+    );
+
+    // The topics themselves are different: "paused" vs "emerg".
+    assert_ne!(
+        TOPIC_PAUSED, TOPIC_EMERGENCY_PAUSED,
+        "TOPIC_PAUSED and TOPIC_EMERGENCY_PAUSED must be distinct symbols"
+    );
+}
+
+// ============================================================================
 // ISSUE #189: Block upgrade while paused
 // ============================================================================
 

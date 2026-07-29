@@ -158,3 +158,37 @@ fn test_set_max_consecutive_failures_rejects_zero() {
     let res = client.try_set_max_consecutive_failures(&0);
     assert!(res.is_err(), "threshold of 0 must be rejected");
 }
+
+// ============================================================================
+// Issue #507 – lowering threshold below current count triggers pause
+// ============================================================================
+
+#[test]
+fn test_lowering_threshold_triggers_pause_on_next_failure() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _owner, _blend_pool) = setup_failing_blend(&env, 10_000_000_i128);
+
+    // Default threshold is 3. Accumulate 2 failures (below threshold).
+    client.rebalance(&symbol_short!("blend"), &500_i128, &0_i128);
+    assert_eq!(client.get_consecutive_failures(), 1);
+    assert!(!client.is_paused());
+
+    client.rebalance(&symbol_short!("blend"), &500_i128, &0_i128);
+    assert_eq!(client.get_consecutive_failures(), 2);
+    assert!(!client.is_paused());
+
+    // Lower the threshold to 2, which equals the current count.
+    client.set_max_consecutive_failures(&2);
+    assert_eq!(client.get_max_consecutive_failures(), 2);
+
+    // The very next failure pushes the counter to 3, which is >= the new
+    // threshold of 2, so the vault must auto-pause on this call.
+    client.rebalance(&symbol_short!("blend"), &500_i128, &0_i128);
+    assert_eq!(client.get_consecutive_failures(), 3);
+    assert!(
+        client.is_paused(),
+        "lowering threshold to at/below current count must trigger auto-pause on next failure"
+    );
+}
