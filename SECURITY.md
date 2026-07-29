@@ -131,6 +131,26 @@ Soroban persistent entries (such as each user's `Shares` record) accrue state re
 | touch_user_ttl | - | - | - | anyone |
 | set_user_strategy | - | - | yes | - |
 
+### Emergency Harvest Fallback (Issue #506)
+
+When the agent key is lost, compromised, or mid-rotation via the
+`update_agent` timelock, the normal `harvest()` function is unusable because
+it requires agent authorization. The owner can call `emergency_harvest(min_out)`
+to compound yield during this window:
+
+- **Gating**: Owner auth only (not agent auth)
+- **Pause bypass**: Works even when the vault is paused, so the owner can
+  compound yield during an emergency pause without unpausing first
+- **Same mechanics**: Withdraws accrued yield from the active protocol and
+  re-supplies it (same round-trip as `harvest()`)
+- **Distinct event**: Emits `EmergencyHarvestEvent` (topic `em_harv`) so
+  indexers can differentiate from agent-initiated `HarvestEvent` (topic
+  `harvest`)
+
+| Function | Owner | Agent | User | Anyone |
+|----------|-------|-------|------|--------|
+| emergency_harvest | yes | - | - | - |
+
 ## Security Best Practices Implemented
 
 1. **Checks-Effects-Interactions Pattern**: All state updates happen before external calls
@@ -263,6 +283,32 @@ stellar contract invoke \
 ```
 
 **Requires**: owner auth **[owner]**
+
+### Step 5a — Emergency harvest during agent-key rotation
+
+If the vault has funds deployed to a protocol (Blend or DEX) and the agent
+key is being rotated, use `emergency_harvest` to compound yield without
+waiting for the new agent key:
+
+```bash
+stellar contract invoke \
+  --id $VAULT_CONTRACT_ID \
+  --source <NEW_OWNER_SECRET_KEY> \
+  --network mainnet \
+  -- emergency_harvest \
+  --min_out 0
+```
+
+**Requires**: owner auth **[owner]**
+
+> **Note:** `emergency_harvest` bypasses the paused-state check, so it can be
+> called before or after `unpause`. It still respects the rebalance cooldown
+> and requires an active protocol (panics with `UnsupportedProtocol`
+> if `CurrentProtocol == "none"`). The emitted `EmergencyHarvestEvent` (topic
+> `em_harv`) is distinct from the regular `HarvestEvent` (topic `harvest`).
+>
+> Resume normal agent-initiated `harvest()` calls once the new agent key is
+> confirmed.
 
 ### Step 6 — Post-incident
 

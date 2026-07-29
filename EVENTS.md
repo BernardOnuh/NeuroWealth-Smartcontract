@@ -160,6 +160,43 @@ pub struct RebalanceFailedEvent {
 }
 ```
 
+### 4c. HarvestEvent
+**Topic:** `"harvest"` (`TOPIC_HARVEST`)
+
+Emitted when the AI agent compounds accrued yield via `harvest()`. The
+function withdraws from the active protocol and immediately re-supplies,
+so the vault balance returns to the same position with compounded yield.
+
+```rust
+pub struct HarvestEvent {
+    pub protocol: Symbol,       // The protocol harvested from ("blend" or "dex")
+    pub amount_harvested: i128, // Amount withdrawn and re-deposited
+}
+```
+
+**Usage:**
+- AI agents track compounding frequency and yield accrual
+- Indexers distinguish harvests from rebalances for audit trails
+
+### 4d. EmergencyHarvestEvent
+**Topic:** `"em_harv"` (`TOPIC_EMERGENCY_HARVEST`)
+
+Emitted when the **owner** triggers an emergency harvest fallback via
+`emergency_harvest()`. This is a distinct event from `HarvestEvent` so that
+indexers can differentiate agent-initiated harvests from owner-initiated
+emergency harvests during agent-key outages or rotations.
+
+```rust
+pub struct EmergencyHarvestEvent {
+    pub protocol: Symbol,       // The protocol harvested from ("blend" or "dex")
+    pub amount_harvested: i128, // Amount withdrawn and re-deposited
+}
+```
+
+**Usage:**
+- Indexers can alert on emergency harvests (potential agent-key issues)
+- Audit trail distinguishes owner vs agent compounding actions
+
 ## Administrative Events
 
 ### 5. VaultPausedEvent
