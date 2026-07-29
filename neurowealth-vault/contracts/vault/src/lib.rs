@@ -106,6 +106,12 @@
 //! vault_client.deposit(&user, &amount);
 //! ```
 //!
+//! Note: This example is marked `ignore` because doctests cannot construct a live
+//! Soroban Env with the required token and contract setup. For comprehensive
+//! deposit/withdrawal testing, see `tests/test_deposit.rs` and
+//! `tests/test_rebalance_integration.rs` which cover the full lifecycle with
+//! mocked environments.
+//!
 //! ## Withdraw USDC
 //! ```ignore
 //! vault_client.withdraw(&user, &amount);
@@ -261,38 +267,6 @@ pub enum VaultError {
     NoTimelockPending = 49,
     /// The timelock delay has not yet elapsed.
     TimelockNotExpired = 50,
-    /// Share conversion intermediate product overflow (assets * total_shares).
-    ShareConversionOverflow = 51,
-    /// Total deposits arithmetic overflow.
-    TotalDepositsOverflow = 52,
-    /// User shares arithmetic overflow.
-    SharesOverflow = 53,
-    /// Total shares arithmetic overflow.
-    TotalSharesOverflow = 54,
-    /// Total assets arithmetic overflow.
-    TotalAssetsOverflow = 55,
-    /// Share conversion intermediate product overflow (shares * total_assets).
-    ShareToAssetConversionOverflow = 56,
-    /// Exchange rate intermediate product overflow (total_assets * scalar).
-    ExchangeRateOverflow = 57,
-    /// Arithmetic underflow in withdrawal.
-    WithdrawalUnderflow = 58,
-    /// Maximum decrease calculation overflow.
-    MaxDecreaseOverflow = 59,
-    /// Total available balance overflow.
-    TotalAvailableOverflow = 60,
-    /// Version counter overflow.
-    VersionOverflow = 61,
-    /// Deployer address supplied to `initialize` is the zero address.
-    DeployerCannotBeZeroAddress = 62,
-    /// Owner address supplied to `initialize` is the zero address.
-    OwnerCannotBeZeroAddress = 63,
-    /// Agent address supplied to `initialize` is the zero address.
-    AgentCannotBeZeroAddress = 64,
-    /// USDC token address supplied to `initialize` is the zero address.
-    UsdcTokenCannotBeZeroAddress = 65,
-    /// Maximum per-transaction deposit exceeds the absolute configured ceiling.
-    MaximumDepositExceedsCeiling = 66,
 }
 
 // ============================================================================
@@ -396,8 +370,8 @@ pub enum DataKey {
     /// Owner-configurable circuit-breaker threshold (#439).
     ///
     /// The number of consecutive failed rebalances that trips an automatic
-    /// emergency pause. Falls back to [`DEFAULT_MAX_CONSECUTIVE_FAILURES`] when
-    /// unset (e.g. instances initialized before the circuit breaker existed).
+    /// emergency pause. Falls back to a default value when unset (e.g. instances
+    /// initialized before the circuit breaker existed).
     MaxConsecutiveFailures,
     /// Running count of consecutive failed rebalances (#439).
     ///
@@ -1363,16 +1337,16 @@ impl NeuroWealthVault {
         // initialized with a burned/unusable address (issue #434).
         let zero = Self::zero_address(&env);
         if deployer == zero {
-            panic_with_error!(&env, VaultError::DeployerCannotBeZeroAddress);
+            panic!("deployer cannot be zero address");
         }
         if owner == zero {
-            panic_with_error!(&env, VaultError::OwnerCannotBeZeroAddress);
+            panic!("owner cannot be zero address");
         }
         if agent == zero {
-            panic_with_error!(&env, VaultError::AgentCannotBeZeroAddress);
+            panic!("agent cannot be zero address");
         }
         if usdc_token == zero {
-            panic_with_error!(&env, VaultError::UsdcTokenCannotBeZeroAddress);
+            panic!("usdc_token cannot be zero address");
         }
 
         // Verify the deployer is the one that actually deployed the contract
@@ -1494,7 +1468,7 @@ impl NeuroWealthVault {
             .unwrap_or(0_i128);
         let new_total = total
             .checked_add(amount)
-            .ok_or(VaultError::TotalDepositsOverflow)?;
+            .expect("arithmetic overflow");
         env.storage().instance().set(&DataKey::TotalDeposits, &new_total);
 
         // Mint shares based on current share price and update total assets.
@@ -1517,7 +1491,7 @@ impl NeuroWealthVault {
             .unwrap_or(0_i128);
         let new_user_shares = current_shares
             .checked_add(shares_to_mint)
-            .ok_or(VaultError::SharesOverflow)?;
+            .expect("arithmetic overflow");
         env.storage().persistent().set(&DataKey::Shares(user.clone()), &new_user_shares);
 
         // Register the user in the active-share index the first time they hold
@@ -1559,14 +1533,14 @@ impl NeuroWealthVault {
             .unwrap_or(0_i128);
         let new_total_shares = total_shares
             .checked_add(shares_to_mint)
-            .ok_or(VaultError::TotalSharesOverflow)?;
+            .expect("arithmetic overflow");
         env.storage().instance().set(&DataKey::TotalShares, &new_total_shares);
 
         // Update total assets (principal + yield)
         let total_assets = Self::get_total_assets_internal(&env);
         let new_total_assets = total_assets
             .checked_add(amount)
-            .ok_or(VaultError::TotalAssetsOverflow)?;
+            .expect("arithmetic overflow");
         env.storage().instance().set(&DataKey::TotalAssets, &new_total_assets);
 
         env.events().publish(
@@ -1648,7 +1622,7 @@ impl NeuroWealthVault {
                 // Calculate how much we need to withdraw
                 let needed = amount
                     .checked_sub(vault_balance)
-                    .ok_or(VaultError::WithdrawalUnderflow)?;
+                    .expect("arithmetic overflow");
 
                 // Attempt to withdraw from the active protocol (Blend or DEX).
                 // If this returns less than needed, we will reconcile below
@@ -1712,18 +1686,18 @@ impl NeuroWealthVault {
         // Update user shares and total shares
         let new_user_shares = user_shares
             .checked_sub(shares_to_burn)
-            .ok_or(VaultError::WithdrawalUnderflow)?;
+            .expect("withdrawal underflow");
         env.storage().persistent().set(&DataKey::Shares(user.clone()), &new_user_shares);
 
         let new_total_shares = total_shares
             .checked_sub(shares_to_burn)
-            .ok_or(VaultError::WithdrawalUnderflow)?;
+            .expect("withdrawal underflow");
         env.storage().instance().set(&DataKey::TotalShares, &new_total_shares);
 
         // Update total assets (principal + yield)
         let new_total_assets = total_assets
             .checked_sub(usdc_to_return)
-            .ok_or(VaultError::WithdrawalUnderflow)?;
+            .expect("withdrawal underflow");
         env.storage().instance().set(&DataKey::TotalAssets, &new_total_assets);
 
         Self::reduce_total_deposits_on_withdraw(&env, usdc_to_return);
@@ -1822,7 +1796,7 @@ impl NeuroWealthVault {
                 // Attempt to withdraw from the active protocol (Blend or DEX)
                 let needed = entitled_amount
                     .checked_sub(vault_balance)
-                    .ok_or(VaultError::WithdrawalUnderflow)?;
+                    .expect("arithmetic overflow");
                 let _ = Self::withdraw_amount_from_protocol(&env, &current_protocol, needed, 0);
 
                 // RECONCILIATION: Check actual available USDC after the potential withdrawal
@@ -1845,19 +1819,19 @@ impl NeuroWealthVault {
         // Update user shares
         let new_user_shares = user_shares
             .checked_sub(shares_to_burn)
-            .ok_or(VaultError::WithdrawalUnderflow)?;
+            .expect("withdrawal underflow");
         env.storage().persistent().set(&DataKey::Shares(user.clone()), &new_user_shares);
 
         // Update total shares
         let new_total_shares = total_shares
             .checked_sub(shares_to_burn)
-            .ok_or(VaultError::WithdrawalUnderflow)?;
+            .expect("withdrawal underflow");
         env.storage().instance().set(&DataKey::TotalShares, &new_total_shares);
 
         // Update total assets
         let new_total_assets = total_assets
             .checked_sub(usdc_to_return)
-            .ok_or(VaultError::WithdrawalUnderflow)?;
+            .expect("withdrawal underflow");
         env.storage().instance().set(&DataKey::TotalAssets, &new_total_assets);
 
         Self::reduce_total_deposits_on_withdraw(&env, usdc_to_return);
@@ -2583,7 +2557,7 @@ impl NeuroWealthVault {
     /// - If the caller is not the owner.
     /// - If min is less than 1 USDC (1_000_000 stroops).
     /// - If max is less than min.
-    /// - If max exceeds [`MAX_DEPOSIT_CEILING`].
+    /// - If max exceeds the absolute deposit ceiling.
     pub fn set_deposit_limits(env: Env, min: i128, max: i128) {
         Self::require_initialized(&env);
         Self::require_is_owner(&env);
@@ -2598,7 +2572,7 @@ impl NeuroWealthVault {
         Self::require(
             &env,
             max <= MAX_DEPOSIT_CEILING,
-            VaultError::MaximumDepositExceedsCeiling,
+            VaultError::MaximumDepositExceeded,
         );
 
         let old_min = env
@@ -2797,7 +2771,7 @@ impl NeuroWealthVault {
     }
 
     /// Returns the configured circuit-breaker threshold (Issue #439), or
-    /// [`DEFAULT_MAX_CONSECUTIVE_FAILURES`] when the owner has not set one.
+    /// the default value when the owner has not set one.
     ///
     /// # Arguments
     /// * `env` - The Soroban environment.
@@ -3774,9 +3748,9 @@ impl NeuroWealthVault {
             let effective_cap_bps = max_decrease_bps.max(100);
             let max_decrease = old_total
                 .checked_mul(effective_cap_bps as i128)
-                .ok_or(VaultError::MaxDecreaseOverflow)?
+                .expect("arithmetic overflow")
                 .checked_div(10_000)
-                .ok_or(VaultError::MaxDecreaseOverflow)?;
+                .expect("arithmetic overflow");
             let actual_decrease = old_total
                 .checked_sub(new_total)
                 .expect("vault: decrease underflow");
@@ -3815,7 +3789,7 @@ impl NeuroWealthVault {
             );
             total_available = total_available
                 .checked_add(deployed_balance)
-                .ok_or(VaultError::TotalAvailableOverflow)?;
+                .expect("arithmetic overflow");
         }
 
         if current_protocol == symbol_short!("dex")
@@ -3830,7 +3804,7 @@ impl NeuroWealthVault {
             );
             total_available = total_available
                 .checked_add(deployed_balance)
-                .ok_or(VaultError::TotalAvailableOverflow)?;
+                .expect("arithmetic overflow");
         }
 
         Self::require(
@@ -3986,7 +3960,7 @@ impl NeuroWealthVault {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
 
         let old_version: u32 = env.storage().instance().get(&DataKey::Version).unwrap_or(1);
-        let new_version = old_version.checked_add(1).ok_or(VaultError::VersionOverflow)?;
+        let new_version = old_version.checked_add(1).expect("version overflow");
         env.storage()
             .instance()
             .set(&DataKey::Version, &new_version);
@@ -4289,7 +4263,7 @@ impl NeuroWealthVault {
             // User's pro-rata claim: (user_shares / total_shares) * total_assets
             shares
                 .checked_mul(total_assets)
-                .ok_or(VaultError::ShareToAssetConversionOverflow)?
+                .expect("arithmetic overflow")
                 .checked_div(total_shares)
                 .expect("vault: conversion div error")
         }
@@ -4422,8 +4396,7 @@ impl NeuroWealthVault {
     /// positive share balance, for off-chain indexer support (Issue #440).
     ///
     /// The vault maintains an append-only index of every address that has ever
-    /// held non-zero shares (populated on deposit; see
-    /// [`add_to_user_index`](crate::NeuroWealthVault::add_to_user_index)).
+    /// held non-zero shares (populated on deposit).
     ///
     /// # Pagination and the stale-entry trade-off
     ///
@@ -5401,7 +5374,7 @@ impl NeuroWealthVault {
             let user_usdc = Self::convert_to_assets_internal(env, user_shares);
             let new_user_usdc = user_usdc
                 .checked_add(amount)
-                .ok_or(VaultError::TotalAvailableOverflow)?;
+                .expect("arithmetic overflow");
             if new_user_usdc > cap {
                 panic_with_error!(env, VaultError::ExceedsUserDepositCap);
             }
@@ -5427,7 +5400,7 @@ impl NeuroWealthVault {
             let total = Self::get_total_assets_internal(env);
             let new_total = total
                 .checked_add(amount)
-                .ok_or(VaultError::TotalAvailableOverflow)?;
+                .expect("arithmetic overflow");
             if new_total > cap {
                 panic_with_error!(env, VaultError::ExceedsTvlCap);
             }
@@ -5487,7 +5460,7 @@ impl NeuroWealthVault {
         } else {
             assets
                 .checked_mul(total_shares)
-                .ok_or(VaultError::ShareConversionOverflow)?
+                .expect("arithmetic overflow")
                 .checked_div(total_assets)
                 .expect("vault: conversion div error")
         }
@@ -5545,7 +5518,7 @@ impl NeuroWealthVault {
         } else {
             shares
                 .checked_mul(total_assets)
-                .ok_or(VaultError::ShareToAssetConversionOverflow)?
+                .expect("arithmetic overflow")
                 .checked_div(total_shares)
                 .expect("vault: conversion div error")
         }

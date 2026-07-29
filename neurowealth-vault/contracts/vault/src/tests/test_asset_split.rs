@@ -252,3 +252,99 @@ fn test_get_asset_breakdown_matches_individual_getters_for_dex() {
         "deployed should equal deposited amount after full supply to the DEX"
     );
 }
+
+// ============================================================================
+// ISSUE #384: idle + deployed == total invariant across rebalance cycle
+// ============================================================================
+
+/// Test that `idle_balance + deployed_assets == total_assets` holds invariant
+/// across a full supply → partial withdraw → protocol switch sequence.
+///
+/// This regression test guards against accounting bugs in the rebalance or
+/// partial-withdrawal paths that could silently misreport the vault's true
+/// asset composition.
+#[test]
+fn test_idle_plus_deployed_equals_total_across_rebalance_cycle() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let _blend_client = MockBlendPoolClient::new(&env, &blend_pool);
+
+    // Configure Blend pool
+    client.set_blend_pool(&owner, &blend_pool);
+
+    // Set up DEX pool for protocol switch
+    let dex_pool = env.register_contract(None, MockDexPool);
+    client.set_dex_pool(&owner, &dex_pool);
+
+    let user = Address::generate(&env);
+    let deposit_amount = 20_000_000_i128; // 20 USDC
+
+    // STEP 1: Deposit
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
+    let idle = client.get_idle_balance();
+    let deployed = client.get_deployed_assets();
+    let total = client.get_total_assets();
+    assert_eq!(
+        idle + deployed,
+        total,
+        "idle + deployed must equal total after deposit"
+    );
+    assert_eq!(idle, deposit_amount, "all funds should be idle after deposit");
+    assert_eq!(deployed, 0, "nothing should be deployed after deposit");
+
+    // STEP 2: Rebalance to Blend
+    client.rebalance(&symbol_short!("blend"), &700_i128, &0_i128);
+    let idle = client.get_idle_balance();
+    let deployed = client.get_deployed_assets();
+    let total = client.get_total_assets();
+    assert_eq!(
+        idle + deployed,
+        total,
+        "idle + deployed must equal total after rebalance to blend"
+    );
+    assert_eq!(idle, 0, "nothing should be idle after rebalance to blend");
+    assert_eq!(
+        deployed, deposit_amount,
+        "all funds should be deployed after rebalance to blend"
+    );
+
+    // STEP 3: Partial withdraw
+    let withdraw_amount = 5_000_000_i128; // 5 USDC
+    client.withdraw(&user, &withdraw_amount);
+    let idle = client.get_idle_balance();
+    let deployed = client.get_deployed_assets();
+    let total = client.get_total_assets();
+    assert_eq!(
+        idle + deployed,
+        total,
+        "idle + deployed must equal total after partial withdraw"
+    );
+    // After partial withdraw from Blend, funds should be pulled back to vault
+    assert_eq!(
+        idle,
+        deposit_amount - withdraw_amount,
+        "remaining funds should be idle after partial withdraw"
+    );
+    assert_eq!(deployed, 0, "nothing should be deployed after partial withdraw");
+
+    // STEP 4: Rebalance to DEX (different protocol)
+    client.rebalance(&symbol_short!("dex"), &800_i128, &0_i128);
+    let idle = client.get_idle_balance();
+    let deployed = client.get_deployed_assets();
+    let total = client.get_total_assets();
+    assert_eq!(
+        idle + deployed,
+        total,
+        "idle + deployed must equal total after rebalance to dex"
+    );
+    assert_eq!(idle, 0, "nothing should be idle after rebalance to dex");
+    assert_eq!(
+        deployed,
+        deposit_amount - withdraw_amount,
+        "remaining funds should be deployed after rebalance to dex"
+    );
+}
