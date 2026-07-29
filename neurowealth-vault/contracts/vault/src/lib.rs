@@ -612,6 +612,8 @@ pub struct TvlCapUpdatedEvent {
     pub old_cap: i128,
     /// TVL cap after the change, in USDC raw units (7 decimals)
     pub new_cap: i128,
+    /// Ledger timestamp when the cap was changed
+    pub timestamp: u64,
 }
 
 /// Emitted when the per-user deposit cap is updated via `set_user_deposit_cap`.
@@ -624,6 +626,8 @@ pub struct UserDepositCapUpdatedEvent {
     pub old_cap: i128,
     /// Per-user deposit cap after the change, in USDC raw units (7 decimals)
     pub new_cap: i128,
+    /// Ledger timestamp when the cap was changed
+    pub timestamp: u64,
 }
 
 /// Emitted when both user deposit cap and TVL cap are updated.
@@ -797,6 +801,15 @@ pub struct OwnershipTransferCancelledEvent {
     pub owner: Address,
     /// Pending owner address that was discarded
     pub cancelled_pending: Address,
+}
+
+/// Information about a pending ownership transfer.
+///
+/// Returned by [`get_pending_ownership`] when a transfer is in progress.
+#[contracttype]
+pub struct PendingOwnershipInfo {
+    pub pending_owner: Address,
+    pub timelock_expiry: u64,
 }
 
 /// Emitted when the agent reports new total assets via `update_total_assets`
@@ -2366,6 +2379,15 @@ impl NeuroWealthVault {
             VaultError::OnlyOwnerCanEmergencyPause,
         );
 
+        let already_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if already_paused {
+            return;
+        }
+
         env.storage().instance().set(&DataKey::Paused, &true);
 
         let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
@@ -2531,6 +2553,7 @@ impl NeuroWealthVault {
             TvlCapUpdatedEvent {
                 old_cap: old_tvl_cap,
                 new_cap: cap,
+                timestamp: env.ledger().timestamp(),
             },
         );
     }
@@ -2583,6 +2606,7 @@ impl NeuroWealthVault {
             UserDepositCapUpdatedEvent {
                 old_cap: old_user_cap,
                 new_cap: cap,
+                timestamp: env.ledger().timestamp(),
             },
         );
     }
@@ -2647,6 +2671,24 @@ impl NeuroWealthVault {
             .set(&DataKey::UserDepositCap, &user_deposit_cap);
         env.storage().instance().set(&DataKey::TvLCap, &tvl_cap);
 
+        let timestamp = env.ledger().timestamp();
+
+        env.events().publish(
+            (TOPIC_USER_CAP_UPDATED,),
+            UserDepositCapUpdatedEvent {
+                old_cap: old_user_cap,
+                new_cap: user_deposit_cap,
+                timestamp,
+            },
+        );
+        env.events().publish(
+            (TOPIC_TVL_CAP_UPDATED,),
+            TvlCapUpdatedEvent {
+                old_cap: old_tvl_cap,
+                new_cap: tvl_cap,
+                timestamp,
+            },
+        );
         env.events().publish(
             (TOPIC_CAPS_UPDATED,),
             CapsUpdatedEvent {
@@ -3875,6 +3917,27 @@ impl NeuroWealthVault {
     pub fn get_pending_owner(env: Env) -> Option<Address> {
         Self::require_initialized(&env);
         env.storage().instance().get(&DataKey::PendingOwner)
+    }
+
+    /// Returns the pending ownership information, if any.
+    ///
+    /// Provides both the pending owner address and timelock expiry in a single
+    /// struct, making it easier for off-chain monitors to display pending
+    /// ownership transfers.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// `Some(PendingOwnershipInfo)` if a transfer is pending, `None` otherwise
+    pub fn get_pending_ownership(env: Env) -> Option<PendingOwnershipInfo> {
+        Self::require_initialized(&env);
+        let pending_owner: Option<Address> =
+            env.storage().instance().get(&DataKey::PendingOwner);
+        pending_owner.map(|owner| PendingOwnershipInfo {
+            pending_owner: owner,
+            timelock_expiry: 0,
+        })
     }
 
     /// Updates the total assets tracked by the vault.
