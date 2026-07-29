@@ -182,6 +182,52 @@ fn test_emergency_pause_emits_event() {
     assert_eq!(event.owner, owner, "Event owner should match caller");
 }
 
+#[test]
+fn test_emergency_pause_idempotent() {
+    // Verifies that calling emergency_pause() when already paused
+    // does not panic and does not emit a second event (Issue #534).
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    assert!(!client.is_paused());
+
+    // First call — must pause and emit exactly one event
+    client.emergency_pause(&owner);
+    assert!(client.is_paused());
+
+    let events_after_first = find_events_by_topic(
+        env.events().all(),
+        &env,
+        soroban_sdk::symbol_short!("emerg"),
+    );
+    assert_eq!(
+        events_after_first.len(),
+        1,
+        "first emergency_pause must emit exactly one event"
+    );
+
+    // Second call — must NOT panic, must NOT emit a second event
+    client.emergency_pause(&owner);
+    assert!(
+        client.is_paused(),
+        "paused state must remain unchanged after second call"
+    );
+
+    let events_after_second = find_events_by_topic(
+        env.events().all(),
+        &env,
+        soroban_sdk::symbol_short!("emerg"),
+    );
+    assert_eq!(
+        events_after_second.len(),
+        1,
+        "second emergency_pause must NOT emit a duplicate event"
+    );
+}
+
 // ============================================================================
 // ISSUE #508: Circuit-breaker auto-pause distinguishable from owner pause
 // ============================================================================
