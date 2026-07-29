@@ -293,6 +293,78 @@ fn test_concurrent_deposit_during_blend_deployment() {
     assert_vault_invariants(&client, &[user]);
 }
 
+/// Harvest interleaved with withdrawals → vault solvency is maintained throughout.
+///
+/// Scenario (#522):
+/// 1. Two users deposit into a Blend-backed vault.
+/// 2. Agent rebalances into Blend and then calls harvest() twice, interleaved
+///    with user withdrawals.
+/// 3. After each operation the core invariant is verified:
+///       idle_balance + deployed_assets == total_assets
+/// 4. Each user can still withdraw their full remaining balance at the end.
+#[test]
+fn test_concurrent_harvest_interleaved_with_withdrawals() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+    let blend_client = MockBlendPoolClient::new(&env, &blend_pool);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let user_a = Address::generate(&env);
+    let user_b = Address::generate(&env);
+    let deposit_a = 20_000_000_i128;
+    let deposit_b = 10_000_000_i128;
+
+    mint_and_deposit(&env, &client, &usdc_token, &user_a, deposit_a);
+    mint_and_deposit(&env, &client, &usdc_token, &user_b, deposit_b);
+
+    assert_vault_invariants(&client, &[user_a.clone(), user_b.clone()]);
+
+    // Deploy most of the vault into Blend (cap at 25 USDC so some idle remains).
+    blend_client.set_max_supply_limit(&25_000_000_i128);
+    client.rebalance(&symbol_short!("blend"), &700_i128, &0_i128);
+    assert_vault_invariants(&client, &[user_a.clone(), user_b.clone()]);
+
+    // User A makes a partial withdrawal while Blend holds assets.
+    let withdraw_a1 = 4_000_000_i128;
+    client.withdraw(&user_a, &withdraw_a1);
+    assert_vault_invariants(&client, &[user_a.clone(), user_b.clone()]);
+
+    // Agent harvests (compounds yield back into Blend).
+    // Disable cooldown so harvest can fire right after rebalance.
+    client.set_rebalance_cooldown(&0_u32);
+    client.harvest(&0_i128);
+    assert_vault_invariants(&client, &[user_a.clone(), user_b.clone()]);
+
+    // User B makes a partial withdrawal.
+    let withdraw_b1 = 3_000_000_i128;
+    client.withdraw(&user_b, &withdraw_b1);
+    assert_vault_invariants(&client, &[user_a.clone(), user_b.clone()]);
+
+    // Second harvest after the second withdrawal.
+    client.harvest(&0_i128);
+    assert_vault_invariants(&client, &[user_a.clone(), user_b.clone()]);
+
+    // Both users withdraw their remaining balances; vault should be fully drained.
+    let balance_a = client.get_balance(&user_a);
+    if balance_a > 0 {
+        client.withdraw(&user_a, &balance_a);
+    }
+    let balance_b = client.get_balance(&user_b);
+    if balance_b > 0 {
+        client.withdraw(&user_b, &balance_b);
+    }
+
+    assert_eq!(client.get_shares(&user_a), 0);
+    assert_eq!(client.get_shares(&user_b), 0);
+    assert!(client.get_total_assets() >= 0);
+}
+
 /// Withdrawal that triggers partial Blend exit → verify remaining shares.
 #[test]
 fn test_concurrent_withdrawal_triggers_partial_blend_exit() {
