@@ -297,3 +297,115 @@ fn test_dex_partial_fill_rebalance_accounts_for_actual_amount() {
     // The protocol is still tracked as "dex" (rebalance succeeded with partial fill).
     assert_eq!(vault_client.get_current_protocol(), Symbol::new(&env, "dex"));
 }
+
+// ─── Issue #515: DEX pool rotation mid-deployment ────────────────────────────
+//
+// Documents that rotating the configured DEX pool address while funds are
+// actively deployed silently strands those funds: every subsequent lookup
+// reads the *new* pool address from storage, so the vault loses the ability
+// to see or recover the position in the *old* pool.
+//
+// Pre-fix this test pins the stranding behaviour.  Once a guard is added to
+// `set_dex_pool` that rejects rotation while `CurrentProtocol == "dex"`, flip
+// the rotation call below to expect a panic instead.
+
+#[test]
+fn test_set_dex_pool_rotation_while_deployed_strands_funds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (vault_id, _agent, owner, usdc_token, old_pool) = setup_vault_with_token_and_dex(&env);
+    let vault_client = NeuroWealthVaultClient::new(&env, &vault_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+    let old_pool_client = MockDexPoolClient::new(&env, &old_pool);
+
+    vault_client.set_dex_pool(&owner, &old_pool);
+
+    // Deploy funds to the DEX.
+    let deposit_amount = 20_000_000_i128;
+    token_client.mint(&vault_id, &deposit_amount);
+    vault_client.rebalance(&Symbol::new(&env, "dex"), &850, &0_i128);
+    assert_eq!(
+        old_pool_client.balance(&usdc_token, &vault_id),
+        deposit_amount,
+        "funds must be deployed to the old pool"
+    );
+    assert_eq!(vault_client.get_current_protocol(), Symbol::new(&env, "dex"));
+
+    // Rotate the DEX pool address while funds are still deployed.
+    // No guard currently exists — this succeeds.
+    let new_pool = env.register_contract(None, MockDexPool);
+    vault_client.set_dex_pool(&owner, &new_pool);
+    assert_eq!(vault_client.get_dex_pool(), Some(new_pool.clone()));
+
+    // Funds remain stuck in the old pool; the vault's pointer now targets new_pool.
+    assert_eq!(
+        old_pool_client.balance(&usdc_token, &vault_id),
+        deposit_amount,
+        "deployed funds remain in the old pool, untouched by rotation"
+    );
+    let new_pool_client = MockDexPoolClient::new(&env, &new_pool);
+    assert_eq!(
+        new_pool_client.balance(&usdc_token, &vault_id),
+        0,
+        "new pool has no balance"
+    );
+
+    // Attempting to exit the position silently succeeds without recovering
+    // anything: the vault queries new_pool (via DataKey::DexPool), sees 0,
+    // and flips CurrentProtocol to "none" — funds remain stranded.
+    vault_client.rebalance(&Symbol::new(&env, "none"), &0, &0_i128);
+
+    assert_eq!(
+        vault_client.get_current_protocol(),
+        Symbol::new(&env, "none"),
+        "vault believes it exited the position cleanly"
+    );
+    assert_eq!(
+        token_client.balance(&vault_id),
+        0,
+        "no funds were actually recovered"
+    );
+    assert_eq!(
+        old_pool_client.balance(&usdc_token, &vault_id),
+        deposit_amount,
+        "funds remain permanently stranded in the old pool"
+    );
+}
+
+// ─── Issue #516: min_out slippage on the DEX withdrawal leg ─────────────────
+//
+// Regression test: when `rebalance()` exits a DEX position and the pool
+// returns fewer tokens than `min_out`, the call must panic with
+// `VaultError::MinOutNotMet` (#42) and leave no partial state change.
+//
+// Uses `set_max_withdraw_limit` to cap what the mock DEX returns, simulating
+// a withdrawal partial-fill below the caller's slippage tolerance.
+
+#[test]
+#[should_panic(expected = "Error(Contract, #42)")]
+fn test_rebalance_dex_withdraw_leg_below_min_out_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (vault_id, _agent, owner, usdc_token, dex_pool) = setup_vault_with_token_and_dex(&env);
+    let vault_client = NeuroWealthVaultClient::new(&env, &vault_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+    let dex_client = MockDexPoolClient::new(&env, &dex_pool);
+
+    vault_client.set_dex_pool(&owner, &dex_pool);
+
+    // Deploy 100 USDC into the DEX pool.
+    let deposit_amount = 100_000_000_i128;
+    token_client.mint(&vault_id, &deposit_amount);
+    vault_client.rebalance(&Symbol::new(&env, "dex"), &850, &0_i128);
+    assert_eq!(token_client.balance(&dex_pool), deposit_amount);
+
+    // Cap the pool's withdrawal to 30 USDC — simulates a partial-fill exit.
+    dex_client.set_max_withdraw_limit(&30_000_000);
+
+    // Attempt to exit with min_out = 50 USDC.
+    // The pool can only return 30 USDC, which is below min_out — must panic
+    // with MinOutNotMet (#42), leaving no partial state change.
+    vault_client.rebalance(&Symbol::new(&env, "none"), &0, &50_000_000_i128);
+}
