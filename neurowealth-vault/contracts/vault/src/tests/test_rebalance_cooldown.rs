@@ -268,10 +268,10 @@ fn test_harvest_within_cooldown_panics() {
     client.set_rebalance_cooldown(&10_u32);
 
     // First harvest succeeds and stores the current ledger
-    client.harvest();
+    client.harvest(&0_i128);
 
     // Immediately attempt a second harvest in the same ledger — must panic
-    client.harvest();
+    client.harvest(&0_i128);
 }
 
 /// `try_rebalance` returns the cooldown error without unwinding the test.

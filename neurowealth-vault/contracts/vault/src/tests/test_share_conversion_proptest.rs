@@ -377,7 +377,7 @@ proptest! {
             .expect("overflow not possible at tested bounds");
 
         if shares_minted == 0 {
-            return;
+            return Ok(());
         }
 
         let new_total_shares = total_shares + shares_minted;
