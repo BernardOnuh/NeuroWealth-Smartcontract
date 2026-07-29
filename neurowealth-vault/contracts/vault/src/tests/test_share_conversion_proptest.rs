@@ -358,4 +358,51 @@ proptest! {
             total_shares, total_assets
         );
     }
+
+    // -----------------------------------------------------------------------
+    // (j)  Harvest conversion round-trip (#520)
+    // -----------------------------------------------------------------------
+
+    /// Simulates a deposit followed by a harvest that alters total_assets,
+    /// then a withdrawal. Verifies that the share-to-asset conversion remains
+    /// bounded and consistent.
+    #[test]
+    fn prop_harvest_conversion_round_trip(
+        assets       in 1i128..=MAX_VAL,
+        total_shares in 1i128..=MAX_VAL,
+        total_assets in 1i128..=MAX_VAL,
+        harvest_yield in 0i128..=MAX_VAL / 10,
+    ) {
+        let shares_minted = shares_floor(assets, total_shares, total_assets)
+            .expect("overflow not possible at tested bounds");
+
+        if shares_minted == 0 {
+            return;
+        }
+
+        let new_total_shares = total_shares + shares_minted;
+        let new_total_assets = total_assets + assets;
+
+        // Harvest adds yield to total_assets without changing total_shares
+        let post_harvest_assets = new_total_assets + harvest_yield;
+
+        // User withdraws their assets via ceil conversion for the shares
+        let shares_to_burn = shares_ceil(shares_minted, new_total_shares, post_harvest_assets)
+            .expect("overflow not possible at tested bounds");
+        
+        let assets_returned = assets_from_shares(shares_to_burn, new_total_shares, post_harvest_assets)
+            .expect("overflow not possible at tested bounds");
+
+        // The user's expected exact share of the vault post-harvest
+        let expected_exact_assets = (shares_minted as i128) * (post_harvest_assets as i128) / (new_total_shares as i128);
+
+        // Given ceil and floor rounding, the user should receive at most expected_exact_assets + 2
+        prop_assert!(
+            assets_returned <= expected_exact_assets + 2,
+            "Deposit+harvest+withdraw yielded too many assets: deposited {}, yield {}, returned {} > expected ~{} \
+             (shares_minted={}, new_total_shares={}, post_harvest_assets={})",
+            assets, harvest_yield, assets_returned, expected_exact_assets,
+            shares_minted, new_total_shares, post_harvest_assets
+        );
+    }
 }
