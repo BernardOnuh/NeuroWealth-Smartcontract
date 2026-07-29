@@ -54,3 +54,9 @@ name = "admin_timelock_interleaved"
 path = "fuzz_targets/admin_timelock_interleaved.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "user_strategy"
+path = "fuzz_targets/user_strategy.rs"
+test = false
+doc = false
