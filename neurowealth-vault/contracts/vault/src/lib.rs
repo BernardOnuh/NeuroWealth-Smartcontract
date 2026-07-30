@@ -1609,6 +1609,148 @@ impl NeuroWealthVault {
         );
     }
 
+    /// Deposits multiple amounts in a single transaction. Each entry specifies a
+    /// token address and amount. Currently only the vault's USDC token is
+    /// accepted; other tokens will be supported when multi-asset functionality
+    /// is enabled (Phase 3).
+    ///
+    /// The entire batch is processed atomically — if any transfer fails, the
+    /// whole transaction reverts. Shares are minted once based on the aggregate
+    /// deposit amount, reducing transaction costs for multi-token deposits.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    /// * `user` - The user address depositing funds (must authorize).
+    /// * `entries` - A vector of `(token_address, amount)` pairs.
+    ///
+    /// # Events
+    ///
+    /// Emits one `DepositEvent` per entry.
+    ///
+    /// # Panics
+    ///
+    /// - If any entry's token is not the vault's USDC token (until multi-asset).
+    /// - If any entry's amount fails validation.
+    /// - If the aggregate deposit exceeds the TVL or user cap.
+    /// - If shares to mint rounds down to zero.
+    pub fn batch_deposit(env: Env, user: Address, entries: Vec<(Address, i128)>) {
+        Self::require_initialized(&env);
+        user.require_auth();
+        Self::require_not_paused(&env);
+
+        let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
+        let total_entries = entries.len();
+
+        // First pass: validate every entry before any transfer (fail-fast).
+        let mut total_amount: i128 = 0;
+        for i in 0..total_entries {
+            let (token, amount) = entries.get(i).unwrap();
+            // Until multi-asset is enabled, require all entries to use USDC.
+            if token != usdc_token {
+                panic!("batch_deposit: token {} is not supported; only USDC is accepted", token);
+            }
+            Self::require_positive_amount(&env, amount);
+            total_amount = total_amount
+                .checked_add(amount)
+                .expect("batch_deposit: total amount overflow");
+        }
+
+        // Validate aggregate against vault limits.
+        if total_entries > 0 {
+            Self::require_minimum_deposit(&env, total_amount);
+            Self::require_maximum_deposit(&env, total_amount);
+            Self::require_within_deposit_cap(&env, &user, total_amount);
+            Self::require_within_tvl_cap(&env, total_amount);
+        }
+
+        // Second pass: execute transfers.
+        let token_client = token::Client::new(&env, &usdc_token);
+        for i in 0..total_entries {
+            let (_token, amount) = entries.get(i).unwrap();
+            token_client.transfer(&user, &env.current_contract_address(), &amount);
+        }
+
+        // Update total deposits and mint shares once for the aggregate.
+        let total: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalDeposits)
+            .unwrap_or(0_i128);
+        env.storage().instance().set(
+            &DataKey::TotalDeposits,
+            &(total
+                .checked_add(total_amount)
+                .expect("batch_deposit: total deposits overflow")),
+        );
+
+        let shares_to_mint = Self::convert_to_shares_internal(&env, total_amount);
+        Self::require(
+            &env,
+            shares_to_mint > 0,
+            VaultError::SharesToMintMustBePositive,
+        );
+
+        let current_shares: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Shares(user.clone()))
+            .unwrap_or(0_i128);
+        env.storage().persistent().set(
+            &DataKey::Shares(user.clone()),
+            &(current_shares
+                .checked_add(shares_to_mint)
+                .expect("batch_deposit: shares overflow")),
+        );
+
+        if current_shares == 0
+            && !env
+                .storage()
+                .persistent()
+                .has(&DataKey::UserStrategy(user.clone()))
+        {
+            let default_strategy = Symbol::new(&env, "balanced");
+            env.storage()
+                .persistent()
+                .set(&DataKey::UserStrategy(user.clone()), &default_strategy);
+            env.events().publish(
+                (TOPIC_USER_STRATEGY_UPDATED, user.clone()),
+                UserStrategyUpdatedEvent {
+                    user: user.clone(),
+                    old_strategy: Symbol::new(&env, ""),
+                    new_strategy: default_strategy,
+                },
+            );
+        }
+
+        let total_shares: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalShares)
+            .unwrap_or(0_i128);
+        env.storage().instance().set(
+            &DataKey::TotalShares,
+            &(total_shares
+                .checked_add(shares_to_mint)
+                .expect("batch_deposit: total shares overflow")),
+        );
+
+        let total_assets = Self::get_total_assets_internal(&env);
+        for i in 0..total_entries {
+            let (token, amount) = entries.get(i).unwrap();
+            env.events().publish(
+                (TOPIC_DEPOSIT, user.clone()),
+                DepositEvent {
+                    user: user.clone(),
+                    token,
+                    amount,
+                    shares: shares_to_mint,
+                    total_assets,
+                },
+            );
+        }
+    }
+
     // ==========================================================================
     // CORE LIFECYCLE - WITHDRAW
     // ==========================================================================
