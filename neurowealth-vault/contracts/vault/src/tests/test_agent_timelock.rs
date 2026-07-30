@@ -277,3 +277,33 @@ fn test_cancel_agent_update_after_prior_cancel_rejected() {
     // Cancelling again with no pending proposal must panic.
     client.cancel_agent_update();
 }
+
+// ─── Issue #533 ──────────────────────────────────────────────────────────────
+
+/// `confirm_agent_update()` panics with `NoTimelockPending` (#49) when called
+/// after the pending proposal was already cancelled — the slot is empty again.
+///
+/// This verifies that cancel clears the pending state so that a subsequent
+/// confirm has nothing to act on.
+#[test]
+#[should_panic(expected = "Error(Contract, #49)")]
+fn test_confirm_after_cancel_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    let new_agent = Address::generate(&env);
+    // Propose, then cancel — pending slot is now empty.
+    client.update_agent(&new_agent);
+    client.cancel_agent_update();
+
+    assert!(
+        client.get_pending_agent_update().is_none(),
+        "pending state must be empty after cancel"
+    );
+
+    // Confirming with no pending proposal must panic.
+    client.confirm_agent_update();
+}
