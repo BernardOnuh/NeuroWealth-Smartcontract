@@ -377,7 +377,7 @@ proptest! {
             .expect("overflow not possible at tested bounds");
 
         if shares_minted == 0 {
-            return;
+            return Ok(());
         }
 
         let new_total_shares = total_shares + shares_minted;
@@ -386,8 +386,16 @@ proptest! {
         // Harvest adds yield to total_assets without changing total_shares
         let post_harvest_assets = new_total_assets + harvest_yield;
 
-        // User withdraws their assets via ceil conversion for the shares
-        let shares_to_burn = shares_ceil(shares_minted, new_total_shares, post_harvest_assets)
+        // User wants to withdraw their full position. First compute the
+        // assets they are entitled to, then compute shares to burn via ceil.
+        let entitled_assets = assets_from_shares(shares_minted, new_total_shares, post_harvest_assets)
+            .expect("overflow not possible at tested bounds");
+
+        if entitled_assets == 0 {
+            return Ok(());
+        }
+
+        let shares_to_burn = shares_ceil(entitled_assets, new_total_shares, post_harvest_assets)
             .expect("overflow not possible at tested bounds");
         
         let assets_returned = assets_from_shares(shares_to_burn, new_total_shares, post_harvest_assets)

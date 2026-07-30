@@ -322,7 +322,10 @@ fn test_dex_balance_delta_against_lying_pool() {
     vault_client.set_dex_pool(&owner, &dex_pool);
 
     let deposit_amount = 50_000_000_i128;
-    token_client.mint(&vault_id, &deposit_amount);
+    // Use mint_and_deposit so TotalAssets is properly recorded (deposit
+    // updates TotalAssets; direct mint to the vault address does not).
+    let user = Address::generate(&env);
+    mint_and_deposit(&env, &vault_client, &usdc_token, &user, deposit_amount);
 
     // Configure the pool to lie: it will actually transfer `deposit_amount`
     // but report double that amount as its return value.

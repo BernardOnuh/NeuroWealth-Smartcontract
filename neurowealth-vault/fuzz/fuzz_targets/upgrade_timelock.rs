@@ -16,7 +16,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use neurowealth_vault::{NeuroWealthVault, NeuroWealthVaultClient};
-use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::{Address as _, Ledger};
 use soroban_sdk::{Address, BytesN, Env};
 
 const DEFAULT_TIMELOCK_DELAY: u32 = 100;
@@ -138,7 +138,7 @@ fuzz_target!(|data: &[u8]| {
             Ok(()) => {
                 // Verify invariants after successful operation
                 let actual_pending = client.get_pending_upgrade();
-                match (pending_hash, pending_expiry) {
+                match (pending_hash.clone(), pending_expiry) {
                     (Some(hash), Some(expiry)) => {
                         assert!(
                             actual_pending.is_some(),
