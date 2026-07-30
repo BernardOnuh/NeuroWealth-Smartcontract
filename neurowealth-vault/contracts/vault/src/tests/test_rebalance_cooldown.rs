@@ -255,14 +255,30 @@ fn test_rebalance_within_cooldown_panics() {
 
 /// Calling harvest twice in the same ledger when cooldown == 1 panics with
 /// `RebalanceCooldownActive` (Error(Contract, #43)).
+///
+/// Harvest requires a configured pool and non-"none" protocol, so this test
+/// first sets up a Blend pool and rebalances into it, then advances the
+/// ledger past the cooldown before running the two-harvest sequence.
 #[test]
 #[should_panic(expected = "Error(Contract, #43)")]
 fn test_harvest_within_cooldown_panics() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (contract_id, _agent, _owner) = setup_vault(&env);
+    let (contract_id, _agent, owner, _usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    // Set up Blend pool so harvest has a valid protocol to work with.
+    client.set_blend_pool(&owner, &blend_pool);
+    client.rebalance(&symbol_short!("blend"), &850, &0_i128);
+
+    // Advance ledger past the cooldown we're about to set, so the first
+    // harvest below is not blocked by the rebalance's LastRebalanceLedger.
+    let last = client.get_last_rebalance_ledger();
+    env.ledger().with_mut(|li| {
+        li.sequence_number = last + 20;
+    });
 
     // Set cooldown to 10 ledgers
     client.set_rebalance_cooldown(&10_u32);
