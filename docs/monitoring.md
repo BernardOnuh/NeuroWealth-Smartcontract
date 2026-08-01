@@ -53,6 +53,7 @@ topic; the vault emits structured events for every significant state change.
 | Pause vault | `pause()` | `paused` | Owner |
 | Unpause vault | `unpause()` | `unpaused` | Owner |
 | Emergency pause | `emergency_pause()` | `emerg` | Owner |
+| Emergency harvest | `emergency_harvest()` | `em_harv` | Owner |
 | Set TVL cap | `set_tvl_cap()` | `tvl_cap` | Owner |
 | Initiate ownership transfer | `transfer_ownership()` | `own_init` | Owner |
 | Accept ownership | `accept_ownership()` | `own_xfer` | Pending Owner |
@@ -145,6 +146,35 @@ These patterns may indicate manipulation, insider abuse, or a compromised key.
 | Malicious agent update or upgrade scheduled | `update_agent()` or `schedule_upgrade()` called unexpectedly | Investigate immediately; prepare to call cancel/emergency pause during the 24h timelock |
 | Agent calling non-agent functions | Agent address calling `pause()`, `set_tvl_cap()`, etc. | Key misuse; rotate agent key immediately |
 | TVL cap set to 0 | `set_tvl_cap(0)` effectively blocks all deposits | Verify intent; could be accidental denial-of-service |
+
+### Pause Event Disambiguation
+
+The vault emits two distinct event topics when entering a paused state.
+Indexers **must** use the topic to distinguish the pause cause:
+
+| Pause Cause | Function Called | Event Topic | Event Type |
+|-------------|-----------------|-------------|------------|
+| Circuit-breaker auto-pause | `rebalance()` (internal) | `emerg` | `EmergencyPausedEvent` |
+| Owner-initiated pause | `pause()` | `paused` | `VaultPausedEvent` |
+| Owner emergency pause | `emergency_pause()` | `emerg` | `EmergencyPausedEvent` |
+
+**Key distinction**: Both circuit-breaker auto-pause and `emergency_pause()`
+emit `EmergencyPausedEvent` with topic `emerg`. Only `pause()` emits
+`VaultPausedEvent` with topic `paused`. To determine whether the vault was
+paused by the circuit breaker or by the owner, check:
+
+1. **Event topic**: `emerg` → circuit breaker or emergency pause; `paused` →
+   owner-initiated pause
+2. **Timing correlation**: If an `emerg` event coincides with a failed
+   `rebalance` transaction, it was the circuit breaker. If it correlates with
+   a standalone `emergency_pause` call, it was the owner.
+
+### Emergency Harvest Event
+
+`emergency_harvest()` emits `EmergencyHarvestEvent` (topic `em_harv`), which is
+distinct from the regular `HarvestEvent` (topic `harvest`). This allows
+indexers to differentiate owner-initiated emergency harvests from
+agent-initiated harvests during monitoring and audit trails.
 
 ---
 

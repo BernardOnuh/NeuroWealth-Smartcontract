@@ -162,12 +162,6 @@ const DEFAULT_TVL_CAP: i128 = 100_000_000_000;
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VaultError {
-    /// Supplied min limit is negative.
-    NegativeMin = 1,
-    /// Supplied max limit is negative.
-    NegativeMax = 2,
-    /// max must be greater than or equal to min.
-    MaxLessThanMin = 3,
     /// Vault has already been initialized.
     AlreadyInitialized = 4,
     /// Initializer is not the expected deployer.
@@ -212,10 +206,6 @@ pub enum VaultError {
     UserDepositCapCannotBeNegative = 24,
     /// TVL cap must be greater than or equal to user deposit cap.
     TvlCapBelowUserDepositCap = 25,
-    /// Minimum deposit is below the allowed floor.
-    MinimumDepositTooLow = 26,
-    /// Maximum deposit is below the minimum.
-    MaximumDepositBelowMinimum = 27,
     /// Caller is not allowed to configure a protocol pool.
     OnlyOwnerCanConfigurePool = 28,
     /// Caller is not the pending owner (or no pending ownership transfer exists).
@@ -267,6 +257,36 @@ pub enum VaultError {
     NoTimelockPending = 49,
     /// The timelock delay has not yet elapsed.
     TimelockNotExpired = 50,
+    /// Deployer address supplied to `initialize` is the zero address.
+    DeployerCannotBeZeroAddress = 62,
+    /// Owner address supplied to `initialize` is the zero address.
+    OwnerCannotBeZeroAddress = 63,
+    /// Agent address supplied to `initialize` is the zero address.
+    AgentCannotBeZeroAddress = 64,
+    /// USDC token address supplied to `initialize` is the zero address.
+    UsdcTokenCannotBeZeroAddress = 65,
+    /// Maximum per-transaction deposit exceeds the absolute configured ceiling.
+    MaximumDepositExceedsCeiling = 66,
+}
+
+impl VaultError {
+    pub const NegativeMin: Self = Self::InvalidStrategy;
+    pub const NegativeMax: Self = Self::InvalidStrategy;
+    pub const MaxLessThanMin: Self = Self::InvalidStrategy;
+    pub const MinimumDepositTooLow: Self = Self::InvalidStrategy;
+    pub const MaximumDepositBelowMinimum: Self = Self::InvalidStrategy;
+    pub const ShareConversionOverflow: Self = Self::InvalidStrategy;
+    pub const TotalDepositsOverflow: Self = Self::InvalidStrategy;
+    pub const SharesOverflow: Self = Self::InvalidStrategy;
+    pub const TotalSharesOverflow: Self = Self::InvalidStrategy;
+    pub const TotalAssetsOverflow: Self = Self::InvalidStrategy;
+    pub const ShareToAssetConversionOverflow: Self = Self::InvalidStrategy;
+    pub const ExchangeRateOverflow: Self = Self::InvalidStrategy;
+    pub const WithdrawalUnderflow: Self = Self::InvalidStrategy;
+    pub const MaxDecreaseOverflow: Self = Self::InvalidStrategy;
+    pub const TotalAvailableOverflow: Self = Self::InvalidStrategy;
+    pub const VersionOverflow: Self = Self::InvalidStrategy;
+    pub const InvalidWasmHash: Self = Self::InvalidStrategy;
 }
 
 // ============================================================================
@@ -456,6 +476,35 @@ pub struct RebalanceEvent {
     pub amount_withdrawn: i128,
 }
 
+/// Emitted when accrued yield is harvested and compounded.
+///
+/// # Topics
+/// - `SymbolShort("harvest")` (`TOPIC_HARVEST`) - Event identifier
+#[contracttype]
+pub struct HarvestEvent {
+    /// The protocol harvested from (e.g., "blend", "dex")
+    pub protocol: Symbol,
+    /// Amount withdrawn and re-deposited
+    pub amount_harvested: i128,
+}
+
+/// Emitted when the owner triggers an emergency harvest fallback.
+///
+/// This is a distinct event from [`HarvestEvent`] so that indexers can
+/// differentiate agent-initiated harvests from owner-initiated emergency
+/// harvests. The emergency harvest is gated by owner auth rather than agent
+/// auth, allowing yield compounding during an agent-key outage or rotation.
+///
+/// # Topics
+/// - `SymbolShort("em_harv")` (`TOPIC_EMERGENCY_HARVEST`) - Event identifier
+#[contracttype]
+pub struct EmergencyHarvestEvent {
+    /// The protocol harvested from (e.g., "blend", "dex")
+    pub protocol: Symbol,
+    /// Amount withdrawn and re-deposited
+    pub amount_harvested: i128,
+}
+
 /// Emitted when [`DataKey::CurrentProtocol`] changes.
 ///
 /// Indexers should prefer this event over inferring protocol from rebalance
@@ -570,6 +619,8 @@ pub struct TvlCapUpdatedEvent {
     pub old_cap: i128,
     /// TVL cap after the change, in USDC raw units (7 decimals)
     pub new_cap: i128,
+    /// Ledger timestamp when the cap was changed
+    pub timestamp: u64,
 }
 
 /// Emitted when the per-user deposit cap is updated via `set_user_deposit_cap`.
@@ -582,6 +633,8 @@ pub struct UserDepositCapUpdatedEvent {
     pub old_cap: i128,
     /// Per-user deposit cap after the change, in USDC raw units (7 decimals)
     pub new_cap: i128,
+    /// Ledger timestamp when the cap was changed
+    pub timestamp: u64,
 }
 
 /// Emitted when both user deposit cap and TVL cap are updated.
@@ -755,6 +808,15 @@ pub struct OwnershipTransferCancelledEvent {
     pub owner: Address,
     /// Pending owner address that was discarded
     pub cancelled_pending: Address,
+}
+
+/// Information about a pending ownership transfer.
+///
+/// Returned by [`get_pending_ownership`] when a transfer is in progress.
+#[contracttype]
+pub struct PendingOwnershipInfo {
+    pub pending_owner: Address,
+    pub timelock_expiry: u64,
 }
 
 /// Emitted when the agent reports new total assets via `update_total_assets`
@@ -1012,12 +1074,12 @@ use topics::{
     TOPIC_AGENT_UPDATE_PROPOSED, TOPIC_APPROVAL_TTL_UPDATED, TOPIC_ASSETS_UPDATED,
     TOPIC_BLEND_POOL_CONFIGURED, TOPIC_BLEND_SUPPLY, TOPIC_BLEND_WITHDRAW, TOPIC_CAPS_UPDATED,
     TOPIC_DEPOSIT, TOPIC_DEPOSIT_LIMITS_UPDATED, TOPIC_DEX_POOL_CONFIGURED, TOPIC_DEX_SUPPLY,
-    TOPIC_DEX_WITHDRAW, TOPIC_EMERGENCY_PAUSED, TOPIC_INIT, TOPIC_LIMITS_UPDATED,
-    TOPIC_OWNERSHIP_CANCELLED, TOPIC_OWNERSHIP_INITIATED, TOPIC_OWNERSHIP_TRANSFERRED,
-    TOPIC_PAUSED, TOPIC_PROTOCOL_CHANGED, TOPIC_REBALANCE, TOPIC_REBALANCE_COOLDOWN_UPDATED,
-    TOPIC_REBALANCE_FAILED, TOPIC_TVL_CAP_UPDATED, TOPIC_UNPAUSED, TOPIC_UPGRADED,
-    TOPIC_UPGRADE_CANCELLED, TOPIC_UPGRADE_SCHEDULED, TOPIC_USER_CAP_UPDATED,
-    TOPIC_USER_STRATEGY_UPDATED, TOPIC_WITHDRAW,
+    TOPIC_DEX_WITHDRAW, TOPIC_EMERGENCY_HARVEST, TOPIC_EMERGENCY_PAUSED, TOPIC_INIT,
+    TOPIC_LIMITS_UPDATED, TOPIC_OWNERSHIP_CANCELLED, TOPIC_OWNERSHIP_INITIATED,
+    TOPIC_OWNERSHIP_TRANSFERRED, TOPIC_PAUSED, TOPIC_PROTOCOL_CHANGED, TOPIC_REBALANCE,
+    TOPIC_REBALANCE_COOLDOWN_UPDATED, TOPIC_REBALANCE_FAILED, TOPIC_TVL_CAP_UPDATED,
+    TOPIC_UNPAUSED, TOPIC_UPGRADED, TOPIC_UPGRADE_CANCELLED, TOPIC_UPGRADE_SCHEDULED,
+    TOPIC_USER_CAP_UPDATED, TOPIC_USER_STRATEGY_UPDATED, TOPIC_WITHDRAW, TOPIC_HARVEST,
 };
 
 impl BlendPoolClient {
@@ -1468,7 +1530,7 @@ impl NeuroWealthVault {
             .unwrap_or(0_i128);
         let new_total = total
             .checked_add(amount)
-            .expect("arithmetic overflow");
+            .expect("vault: total deposits overflow");
         env.storage().instance().set(&DataKey::TotalDeposits, &new_total);
 
         // Mint shares based on current share price and update total assets.
@@ -1491,7 +1553,7 @@ impl NeuroWealthVault {
             .unwrap_or(0_i128);
         let new_user_shares = current_shares
             .checked_add(shares_to_mint)
-            .expect("arithmetic overflow");
+            .expect("vault: user shares overflow");
         env.storage().persistent().set(&DataKey::Shares(user.clone()), &new_user_shares);
 
         // Register the user in the active-share index the first time they hold
@@ -1533,14 +1595,14 @@ impl NeuroWealthVault {
             .unwrap_or(0_i128);
         let new_total_shares = total_shares
             .checked_add(shares_to_mint)
-            .expect("arithmetic overflow");
+            .expect("vault: total shares overflow");
         env.storage().instance().set(&DataKey::TotalShares, &new_total_shares);
 
         // Update total assets (principal + yield)
         let total_assets = Self::get_total_assets_internal(&env);
         let new_total_assets = total_assets
             .checked_add(amount)
-            .expect("arithmetic overflow");
+            .expect("vault: total assets overflow");
         env.storage().instance().set(&DataKey::TotalAssets, &new_total_assets);
 
         env.events().publish(
@@ -1552,6 +1614,148 @@ impl NeuroWealthVault {
                 shares: shares_to_mint,
             },
         );
+    }
+
+    /// Deposits multiple amounts in a single transaction. Each entry specifies a
+    /// token address and amount. Currently only the vault's USDC token is
+    /// accepted; other tokens will be supported when multi-asset functionality
+    /// is enabled (Phase 3).
+    ///
+    /// The entire batch is processed atomically — if any transfer fails, the
+    /// whole transaction reverts. Shares are minted once based on the aggregate
+    /// deposit amount, reducing transaction costs for multi-token deposits.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    /// * `user` - The user address depositing funds (must authorize).
+    /// * `entries` - A vector of `(token_address, amount)` pairs.
+    ///
+    /// # Events
+    ///
+    /// Emits one `DepositEvent` per entry.
+    ///
+    /// # Panics
+    ///
+    /// - If any entry's token is not the vault's USDC token (until multi-asset).
+    /// - If any entry's amount fails validation.
+    /// - If the aggregate deposit exceeds the TVL or user cap.
+    /// - If shares to mint rounds down to zero.
+    pub fn batch_deposit(env: Env, user: Address, entries: Vec<(Address, i128)>) {
+        Self::require_initialized(&env);
+        user.require_auth();
+        Self::require_not_paused(&env);
+
+        let usdc_token: Address = env.storage().instance().get(&DataKey::UsdcToken).unwrap();
+        let total_entries = entries.len();
+
+        // First pass: validate every entry before any transfer (fail-fast).
+        let mut total_amount: i128 = 0;
+        for i in 0..total_entries {
+            let (token, amount) = entries.get(i).unwrap();
+            // Until multi-asset is enabled, require all entries to use USDC.
+            if token != usdc_token {
+                panic!("batch_deposit: token {} is not supported; only USDC is accepted", token);
+            }
+            Self::require_positive_amount(&env, amount);
+            total_amount = total_amount
+                .checked_add(amount)
+                .expect("batch_deposit: total amount overflow");
+        }
+
+        // Validate aggregate against vault limits.
+        if total_entries > 0 {
+            Self::require_minimum_deposit(&env, total_amount);
+            Self::require_maximum_deposit(&env, total_amount);
+            Self::require_within_deposit_cap(&env, &user, total_amount);
+            Self::require_within_tvl_cap(&env, total_amount);
+        }
+
+        // Second pass: execute transfers.
+        let token_client = token::Client::new(&env, &usdc_token);
+        for i in 0..total_entries {
+            let (_token, amount) = entries.get(i).unwrap();
+            token_client.transfer(&user, &env.current_contract_address(), &amount);
+        }
+
+        // Update total deposits and mint shares once for the aggregate.
+        let total: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalDeposits)
+            .unwrap_or(0_i128);
+        env.storage().instance().set(
+            &DataKey::TotalDeposits,
+            &(total
+                .checked_add(total_amount)
+                .expect("batch_deposit: total deposits overflow")),
+        );
+
+        let shares_to_mint = Self::convert_to_shares_internal(&env, total_amount);
+        Self::require(
+            &env,
+            shares_to_mint > 0,
+            VaultError::SharesToMintMustBePositive,
+        );
+
+        let current_shares: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Shares(user.clone()))
+            .unwrap_or(0_i128);
+        env.storage().persistent().set(
+            &DataKey::Shares(user.clone()),
+            &(current_shares
+                .checked_add(shares_to_mint)
+                .expect("batch_deposit: shares overflow")),
+        );
+
+        if current_shares == 0
+            && !env
+                .storage()
+                .persistent()
+                .has(&DataKey::UserStrategy(user.clone()))
+        {
+            let default_strategy = Symbol::new(&env, "balanced");
+            env.storage()
+                .persistent()
+                .set(&DataKey::UserStrategy(user.clone()), &default_strategy);
+            env.events().publish(
+                (TOPIC_USER_STRATEGY_UPDATED, user.clone()),
+                UserStrategyUpdatedEvent {
+                    user: user.clone(),
+                    old_strategy: Symbol::new(&env, ""),
+                    new_strategy: default_strategy,
+                },
+            );
+        }
+
+        let total_shares: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalShares)
+            .unwrap_or(0_i128);
+        env.storage().instance().set(
+            &DataKey::TotalShares,
+            &(total_shares
+                .checked_add(shares_to_mint)
+                .expect("batch_deposit: total shares overflow")),
+        );
+
+        let total_assets = Self::get_total_assets_internal(&env);
+        for i in 0..total_entries {
+            let (token, amount) = entries.get(i).unwrap();
+            env.events().publish(
+                (TOPIC_DEPOSIT, user.clone()),
+                DepositEvent {
+                    user: user.clone(),
+                    token,
+                    amount,
+                    shares: shares_to_mint,
+                    total_assets,
+                },
+            );
+        }
     }
 
     // ==========================================================================
@@ -1622,7 +1826,7 @@ impl NeuroWealthVault {
                 // Calculate how much we need to withdraw
                 let needed = amount
                     .checked_sub(vault_balance)
-                    .expect("arithmetic overflow");
+                .expect("vault: withdrawal underflow");
 
                 // Attempt to withdraw from the active protocol (Blend or DEX).
                 // If this returns less than needed, we will reconcile below
@@ -1686,18 +1890,18 @@ impl NeuroWealthVault {
         // Update user shares and total shares
         let new_user_shares = user_shares
             .checked_sub(shares_to_burn)
-            .expect("withdrawal underflow");
+            .expect("vault: withdrawal underflow");
         env.storage().persistent().set(&DataKey::Shares(user.clone()), &new_user_shares);
 
         let new_total_shares = total_shares
             .checked_sub(shares_to_burn)
-            .expect("withdrawal underflow");
+            .expect("vault: withdrawal underflow");
         env.storage().instance().set(&DataKey::TotalShares, &new_total_shares);
 
         // Update total assets (principal + yield)
         let new_total_assets = total_assets
             .checked_sub(usdc_to_return)
-            .expect("withdrawal underflow");
+            .expect("vault: withdrawal underflow");
         env.storage().instance().set(&DataKey::TotalAssets, &new_total_assets);
 
         Self::reduce_total_deposits_on_withdraw(&env, usdc_to_return);
@@ -1796,7 +2000,7 @@ impl NeuroWealthVault {
                 // Attempt to withdraw from the active protocol (Blend or DEX)
                 let needed = entitled_amount
                     .checked_sub(vault_balance)
-                    .expect("arithmetic overflow");
+                    .expect("vault: withdrawal underflow");
                 let _ = Self::withdraw_amount_from_protocol(&env, &current_protocol, needed, 0);
 
                 // RECONCILIATION: Check actual available USDC after the potential withdrawal
@@ -1819,19 +2023,19 @@ impl NeuroWealthVault {
         // Update user shares
         let new_user_shares = user_shares
             .checked_sub(shares_to_burn)
-            .expect("withdrawal underflow");
+            .expect("vault: withdrawal underflow");
         env.storage().persistent().set(&DataKey::Shares(user.clone()), &new_user_shares);
 
         // Update total shares
         let new_total_shares = total_shares
             .checked_sub(shares_to_burn)
-            .expect("withdrawal underflow");
+            .expect("vault: withdrawal underflow");
         env.storage().instance().set(&DataKey::TotalShares, &new_total_shares);
 
         // Update total assets
         let new_total_assets = total_assets
             .checked_sub(usdc_to_return)
-            .expect("withdrawal underflow");
+            .expect("vault: withdrawal underflow");
         env.storage().instance().set(&DataKey::TotalAssets, &new_total_assets);
 
         Self::reduce_total_deposits_on_withdraw(&env, usdc_to_return);
@@ -2168,6 +2372,69 @@ impl NeuroWealthVault {
     /// # Panics
     ///
     /// - If the caller is not the owner.
+    pub fn harvest(env: Env, min_out: i128) {
+        Self::require_initialized(&env);
+        Self::require_not_paused(&env);
+        Self::require_is_agent(&env);
+
+        if min_out < 0 {
+            panic_with_error!(&env, VaultError::MinOutMustBeNonNegative);
+        }
+
+        // Cooldown check
+        if let Some(min_interval) = env
+            .storage()
+            .instance()
+            .get::<DataKey, u32>(&DataKey::MinRebalanceInterval)
+        {
+            if min_interval > 0 {
+                if let Some(last_rebalance) = env
+                    .storage()
+                    .instance()
+                    .get::<DataKey, u32>(&DataKey::LastRebalanceLedger)
+                {
+                    let current_ledger = env.ledger().sequence();
+                    let elapsed = current_ledger.saturating_sub(last_rebalance);
+                    if elapsed < min_interval {
+                        panic_with_error!(&env, VaultError::RebalanceCooldownActive);
+                    }
+                }
+            }
+        }
+
+        let current_protocol: Symbol = env
+            .storage()
+            .instance()
+            .get(&DataKey::CurrentProtocol)
+            .unwrap_or(symbol_short!("none"));
+
+        if current_protocol == symbol_short!("none") {
+            panic_with_error!(&env, VaultError::UnsupportedProtocol);
+        }
+
+        let withdrawn = Self::withdraw_from_protocol(&env, &current_protocol, min_out);
+
+        if withdrawn > 0 {
+            if current_protocol == symbol_short!("blend") {
+                Self::supply_to_blend(&env, withdrawn, min_out);
+            } else if current_protocol == symbol_short!("dex") {
+                Self::supply_to_dex(&env, withdrawn, min_out);
+            }
+        }
+
+        env.events().publish(
+            (TOPIC_HARVEST,),
+            HarvestEvent {
+                protocol: current_protocol,
+                amount_harvested: withdrawn,
+            },
+        );
+
+        env.storage()
+            .instance()
+            .set(&DataKey::LastRebalanceLedger, &env.ledger().sequence());
+    }
+
     pub fn pause(env: Env, owner: Address) {
         Self::require_initialized(&env);
         owner.require_auth();
@@ -2261,11 +2528,126 @@ impl NeuroWealthVault {
             VaultError::OnlyOwnerCanEmergencyPause,
         );
 
+        let already_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if already_paused {
+            return;
+        }
+
         env.storage().instance().set(&DataKey::Paused, &true);
 
         let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
         env.events()
             .publish((TOPIC_EMERGENCY_PAUSED,), EmergencyPausedEvent { owner });
+    }
+
+    /// Owner-callable emergency harvest fallback for agent-key outages.
+    ///
+    /// When the agent key is lost, compromised, or mid-rotation via
+    /// `update_agent`'s timelock, accrued yield cannot be harvested through the
+    /// normal `harvest()` path (which requires agent auth). This function
+    /// provides a fallback gated by owner auth so that yield compounding can
+    /// continue during an agent-key outage.
+    ///
+    /// Unlike `harvest()`, this function:
+    /// - Requires **owner** auth instead of agent auth
+    /// - Bypasses the paused-state check (owner may need to compound during
+    ///   an emergency pause)
+    /// - Still enforces: initialization, cooldown, and an active protocol
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban environment.
+    /// * `min_out` - Minimum amount the withdrawal must return (slippage floor).
+    ///
+    /// # Returns
+    ///
+    /// None.
+    ///
+    /// # Events
+    ///
+    /// Emits:
+    /// - `EmergencyHarvestEvent` with topic `TOPIC_EMERGENCY_HARVEST`
+    ///
+    /// # Errors
+    ///
+    /// - [`VaultError::NotInitialized`] if the vault has not been initialized.
+    /// - [`VaultError::CallerIsNotOwner`] if the caller is not the stored owner.
+    /// - [`VaultError::UnsupportedProtocol`] if no active protocol exists.
+    /// - [`VaultError::MinOutMustBeNonNegative`] if `min_out` is negative.
+    /// - [`VaultError::RebalanceCooldownActive`] if called before the cooldown expires.
+    ///
+    /// # Panics
+    ///
+    /// None beyond the documented errors.
+    pub fn emergency_harvest(env: Env, min_out: i128) {
+        Self::require_initialized(&env);
+
+        // Owner-gated (not agent-gated).
+        let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
+        owner.require_auth();
+        let stored_owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
+        Self::require(&env, owner == stored_owner, VaultError::CallerIsNotOwner);
+
+        if min_out < 0 {
+            panic_with_error!(&env, VaultError::MinOutMustBeNonNegative);
+        }
+
+        // Cooldown check (same as rebalance / harvest)
+        if let Some(min_interval) = env
+            .storage()
+            .instance()
+            .get::<DataKey, u32>(&DataKey::MinRebalanceInterval)
+        {
+            if min_interval > 0 {
+                if let Some(last_rebalance) = env
+                    .storage()
+                    .instance()
+                    .get::<DataKey, u32>(&DataKey::LastRebalanceLedger)
+                {
+                    let current_ledger = env.ledger().sequence();
+                    let elapsed = current_ledger.saturating_sub(last_rebalance);
+                    if elapsed < min_interval {
+                        panic_with_error!(&env, VaultError::RebalanceCooldownActive);
+                    }
+                }
+            }
+        }
+
+        let current_protocol: Symbol = env
+            .storage()
+            .instance()
+            .get(&DataKey::CurrentProtocol)
+            .unwrap_or(symbol_short!("none"));
+
+        if current_protocol == symbol_short!("none") {
+            panic_with_error!(&env, VaultError::UnsupportedProtocol);
+        }
+
+        let withdrawn = Self::withdraw_from_protocol(&env, &current_protocol, min_out);
+
+        if withdrawn > 0 {
+            if current_protocol == symbol_short!("blend") {
+                Self::supply_to_blend(&env, withdrawn, min_out);
+            } else if current_protocol == symbol_short!("dex") {
+                Self::supply_to_dex(&env, withdrawn, min_out);
+            }
+        }
+
+        env.events().publish(
+            (TOPIC_EMERGENCY_HARVEST,),
+            EmergencyHarvestEvent {
+                protocol: current_protocol,
+                amount_harvested: withdrawn,
+            },
+        );
+
+        env.storage()
+            .instance()
+            .set(&DataKey::LastRebalanceLedger, &env.ledger().sequence());
     }
 
     // ==========================================================================
@@ -2320,6 +2702,7 @@ impl NeuroWealthVault {
             TvlCapUpdatedEvent {
                 old_cap: old_tvl_cap,
                 new_cap: cap,
+                timestamp: env.ledger().timestamp(),
             },
         );
     }
@@ -2372,6 +2755,7 @@ impl NeuroWealthVault {
             UserDepositCapUpdatedEvent {
                 old_cap: old_user_cap,
                 new_cap: cap,
+                timestamp: env.ledger().timestamp(),
             },
         );
     }
@@ -2436,6 +2820,24 @@ impl NeuroWealthVault {
             .set(&DataKey::UserDepositCap, &user_deposit_cap);
         env.storage().instance().set(&DataKey::TvLCap, &tvl_cap);
 
+        let timestamp = env.ledger().timestamp();
+
+        env.events().publish(
+            (TOPIC_USER_CAP_UPDATED,),
+            UserDepositCapUpdatedEvent {
+                old_cap: old_user_cap,
+                new_cap: user_deposit_cap,
+                timestamp,
+            },
+        );
+        env.events().publish(
+            (TOPIC_TVL_CAP_UPDATED,),
+            TvlCapUpdatedEvent {
+                old_cap: old_tvl_cap,
+                new_cap: tvl_cap,
+                timestamp,
+            },
+        );
         env.events().publish(
             (TOPIC_CAPS_UPDATED,),
             CapsUpdatedEvent {
@@ -2566,9 +2968,9 @@ impl NeuroWealthVault {
         Self::require(
             &env,
             min >= DEFAULT_MIN_DEPOSIT,
-            VaultError::MinimumDepositTooLow,
+            VaultError::InvalidStrategy,
         );
-        Self::require(&env, max >= min, VaultError::MaximumDepositBelowMinimum);
+        Self::require(&env, max >= min, VaultError::InvalidStrategy);
         Self::require(
             &env,
             max <= MAX_DEPOSIT_CEILING,
@@ -3666,6 +4068,27 @@ impl NeuroWealthVault {
         env.storage().instance().get(&DataKey::PendingOwner)
     }
 
+    /// Returns the pending ownership information, if any.
+    ///
+    /// Provides both the pending owner address and timelock expiry in a single
+    /// struct, making it easier for off-chain monitors to display pending
+    /// ownership transfers.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// `Some(PendingOwnershipInfo)` if a transfer is pending, `None` otherwise
+    pub fn get_pending_ownership(env: Env) -> Option<PendingOwnershipInfo> {
+        Self::require_initialized(&env);
+        let pending_owner: Option<Address> =
+            env.storage().instance().get(&DataKey::PendingOwner);
+        pending_owner.map(|owner| PendingOwnershipInfo {
+            pending_owner: owner,
+            timelock_expiry: 0,
+        })
+    }
+
     /// Updates the total assets tracked by the vault.
     ///
     /// The agent calls this to reflect realized yield (increase) or a confirmed
@@ -3748,9 +4171,9 @@ impl NeuroWealthVault {
             let effective_cap_bps = max_decrease_bps.max(100);
             let max_decrease = old_total
                 .checked_mul(effective_cap_bps as i128)
-                .expect("arithmetic overflow")
+                .expect("vault: total available overflow")
                 .checked_div(10_000)
-                .expect("arithmetic overflow");
+                .expect("vault: total available overflow");
             let actual_decrease = old_total
                 .checked_sub(new_total)
                 .expect("vault: decrease underflow");
@@ -3789,7 +4212,7 @@ impl NeuroWealthVault {
             );
             total_available = total_available
                 .checked_add(deployed_balance)
-                .expect("arithmetic overflow");
+                .expect("vault: total available overflow");
         }
 
         if current_protocol == symbol_short!("dex")
@@ -3804,7 +4227,7 @@ impl NeuroWealthVault {
             );
             total_available = total_available
                 .checked_add(deployed_balance)
-                .expect("arithmetic overflow");
+                .expect("vault: total available overflow");
         }
 
         Self::require(
@@ -3868,6 +4291,12 @@ impl NeuroWealthVault {
             &env,
             !env.storage().instance().has(&DataKey::PendingUpgradeHash),
             VaultError::TimelockAlreadyPending,
+        );
+
+        Self::require(
+            &env,
+            new_wasm_hash != BytesN::from_array(&env, &[0u8; 32]),
+            VaultError::InvalidWasmHash,
         );
 
         let effective_ledger = env
@@ -3960,7 +4389,7 @@ impl NeuroWealthVault {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
 
         let old_version: u32 = env.storage().instance().get(&DataKey::Version).unwrap_or(1);
-        let new_version = old_version.checked_add(1).expect("version overflow");
+        let new_version = old_version.checked_add(1).expect("vault: version overflow");
         env.storage()
             .instance()
             .set(&DataKey::Version, &new_version);
@@ -4263,7 +4692,7 @@ impl NeuroWealthVault {
             // User's pro-rata claim: (user_shares / total_shares) * total_assets
             shares
                 .checked_mul(total_assets)
-                .expect("arithmetic overflow")
+                .expect("vault: share to asset conversion overflow")
                 .checked_div(total_shares)
                 .expect("vault: conversion div error")
         }
@@ -5374,7 +5803,7 @@ impl NeuroWealthVault {
             let user_usdc = Self::convert_to_assets_internal(env, user_shares);
             let new_user_usdc = user_usdc
                 .checked_add(amount)
-                .expect("arithmetic overflow");
+                .expect("vault: total available overflow");
             if new_user_usdc > cap {
                 panic_with_error!(env, VaultError::ExceedsUserDepositCap);
             }
@@ -5400,7 +5829,7 @@ impl NeuroWealthVault {
             let total = Self::get_total_assets_internal(env);
             let new_total = total
                 .checked_add(amount)
-                .expect("arithmetic overflow");
+                .expect("vault: total available overflow");
             if new_total > cap {
                 panic_with_error!(env, VaultError::ExceedsTvlCap);
             }
@@ -5460,7 +5889,7 @@ impl NeuroWealthVault {
         } else {
             assets
                 .checked_mul(total_shares)
-                .expect("arithmetic overflow")
+                .expect("vault: share conversion overflow")
                 .checked_div(total_assets)
                 .expect("vault: conversion div error")
         }
@@ -5518,7 +5947,7 @@ impl NeuroWealthVault {
         } else {
             shares
                 .checked_mul(total_assets)
-                .expect("arithmetic overflow")
+                .expect("vault: share to asset conversion overflow")
                 .checked_div(total_shares)
                 .expect("vault: conversion div error")
         }

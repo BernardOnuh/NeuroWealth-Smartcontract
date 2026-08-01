@@ -5,6 +5,7 @@
 //!   2. Agent call within cooldown panics with clear error (Error(Contract, #43)).
 
 use super::utils::*;
+use crate::DataKey;
 use crate::{RebalanceCooldownUpdatedEvent, TOPIC_REBALANCE_COOLDOWN_UPDATED};
 use soroban_sdk::{symbol_short, testutils::Ledger, Env, TryFromVal};
 
@@ -250,6 +251,43 @@ fn test_rebalance_within_cooldown_panics() {
 
     // Immediately attempt a second rebalance in the same ledger — must panic
     client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
+}
+
+/// Calling harvest twice in the same ledger when cooldown == 1 panics with
+/// `RebalanceCooldownActive` (Error(Contract, #43)).
+///
+/// Harvest requires a configured pool and non-"none" protocol, so this test
+/// first sets up a Blend pool and rebalances into it, then advances the
+/// ledger past the cooldown before running the two-harvest sequence.
+#[test]
+#[should_panic(expected = "Error(Contract, #43)")]
+fn test_harvest_within_cooldown_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, _usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    // Set up Blend pool so harvest has a valid protocol to work with.
+    client.set_blend_pool(&owner, &blend_pool);
+    client.rebalance(&symbol_short!("blend"), &850, &0_i128);
+
+    // Advance ledger past the cooldown we're about to set, so the first
+    // harvest below is not blocked by the rebalance's LastRebalanceLedger.
+    let last = client.get_last_rebalance_ledger();
+    env.ledger().with_mut(|li| {
+        li.sequence_number = last + 20;
+    });
+
+    // Set cooldown to 10 ledgers
+    client.set_rebalance_cooldown(&10_u32);
+
+    // First harvest succeeds and stores the current ledger
+    client.harvest(&0_i128);
+
+    // Immediately attempt a second harvest in the same ledger — must panic
+    client.harvest(&0_i128);
 }
 
 /// `try_rebalance` returns the cooldown error without unwinding the test.
@@ -499,12 +537,12 @@ fn test_very_large_cooldown_blocks_rebalance() {
     let (contract_id, _agent, _owner) = setup_vault(&env);
     let client = NeuroWealthVaultClient::new(&env, &contract_id);
 
-    let huge_interval: u32 = 1_000_000;
+    let huge_interval: u32 = 1_000;
     client.set_rebalance_cooldown(&huge_interval);
     client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
 
     env.ledger().with_mut(|li| {
-        li.sequence_number += 500_000;
+        li.sequence_number += 500;
     });
 
     let result = client.try_rebalance(&symbol_short!("none"), &0_i128, &0_i128);

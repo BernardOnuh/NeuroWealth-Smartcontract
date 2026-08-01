@@ -25,7 +25,9 @@ use crate::{
     TOPIC_PAUSED, TOPIC_REBALANCE, TOPIC_TVL_CAP_UPDATED, TOPIC_UNPAUSED, TOPIC_USER_CAP_UPDATED,
     TOPIC_WITHDRAW,
 };
-use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, TryFromVal};
+use soroban_sdk::{
+    symbol_short, testutils::Address as _, testutils::Ledger, Address, Env, TryFromVal,
+};
 
 // ── snapshot macro ────────────────────────────────────────────────────────────
 
@@ -331,6 +333,8 @@ fn snapshot_tvl_cap_updated_event_all_fields() {
     // Default TVL cap is 100_000_000_000 (100M USDC)
     let old_cap: i128 = 100_000_000_000;
     let new_cap: i128 = 250_000_000_000;
+    let expected_ts: u64 = 123456789;
+    env.ledger().with_mut(|li| li.timestamp = expected_ts);
     client.set_tvl_cap(&new_cap);
 
     let events = find_events_by_topic(env.events().all(), &env, TOPIC_TVL_CAP_UPDATED);
@@ -342,6 +346,7 @@ fn snapshot_tvl_cap_updated_event_all_fields() {
 
     snap!(event, old_cap, old_cap, "TvlCapUpdatedEvent");
     snap!(event, new_cap, new_cap, "TvlCapUpdatedEvent");
+    snap!(event, timestamp, expected_ts, "TvlCapUpdatedEvent");
 }
 
 // ── UserDepositCapUpdatedEvent ────────────────────────────────────────────────
@@ -357,6 +362,8 @@ fn snapshot_user_deposit_cap_updated_event_all_fields() {
     // Default user deposit cap is 10_000_000_000 (10M USDC)
     let old_cap: i128 = 10_000_000_000;
     let new_cap: i128 = 20_000_000_000;
+    let expected_ts: u64 = 123456789;
+    env.ledger().with_mut(|li| li.timestamp = expected_ts);
     client.set_user_deposit_cap(&new_cap);
 
     let events = find_events_by_topic(env.events().all(), &env, TOPIC_USER_CAP_UPDATED);
@@ -368,6 +375,7 @@ fn snapshot_user_deposit_cap_updated_event_all_fields() {
 
     snap!(event, old_cap, old_cap, "UserDepositCapUpdatedEvent");
     snap!(event, new_cap, new_cap, "UserDepositCapUpdatedEvent");
+    snap!(event, timestamp, expected_ts, "UserDepositCapUpdatedEvent");
 }
 
 // ── CapsUpdatedEvent ──────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@
 //!      is bounded by actual assets.
 
 use super::utils::*;
+extern crate std;
 use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env};
 
 // ============================================================================
@@ -61,9 +62,7 @@ fn test_security_agent_massive_increase_then_large_decrease_rejected() {
 
     // Backed: yield arrives, total grows to 30 USDC
     token_client.mint(&contract_id, &10_000_000_i128);
-    client
-        .update_total_assets(&agent, &30_000_000_i128, &false, &0)
-        .expect("yield accrual should pass");
+    client.update_total_assets(&agent, &30_000_000_i128, &false, &0);
 
     // Try decreasing by 5 USDC (16.7%) with max_bps=1000 (10%) → should fail.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -93,9 +92,7 @@ fn test_security_agent_decrease_exceeds_max_bps_rejected() {
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit);
 
     // Backed by idle balance.
-    client
-        .update_total_assets(&agent, &20_000_000_i128, &false, &0)
-        .unwrap();
+    client.update_total_assets(&agent, &20_000_000_i128, &false, &0);
 
     // Drop by 11 USDC (55%) with max_bps=1000 (10%) → Error 32.
     client.update_total_assets(&agent, &9_000_000_i128, &true, &1000);
@@ -117,15 +114,11 @@ fn test_security_agent_repeated_same_value_is_noop() {
     mint_and_deposit(&env, &client, &usdc_token, &user, deposit);
 
     // Initial report ok
-    client
-        .update_total_assets(&agent, &deposit, &false, &0)
-        .unwrap();
+    client.update_total_assets(&agent, &deposit, &false, &0);
     assert_eq!(client.get_total_assets(), deposit);
 
     // Same value again should be a no-op (no shares created).
-    client
-        .update_total_assets(&agent, &deposit, &false, &0)
-        .unwrap();
+    client.update_total_assets(&agent, &deposit, &false, &0);
     assert_eq!(client.get_total_assets(), deposit);
 }
 
@@ -239,9 +232,7 @@ fn test_security_inflation_with_blend_deployment_bounded() {
     assert_eq!(token_client.balance(&blend_pool), deposit);
 
     // Reporting exactly 20 passes (idle+deployed = 20)
-    client
-        .update_total_assets(&agent, &deposit, &false, &0)
-        .unwrap();
+    client.update_total_assets(&agent, &deposit, &false, &0);
 
     // Reporting 30 (10 beyond backing) must fail.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

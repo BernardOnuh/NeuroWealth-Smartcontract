@@ -603,7 +603,8 @@ fn test_wrong_address_cannot_accept_ownership() {
 }
 
 #[test]
-#[should_panic(expected = "vault: no pending owner")]
+// No pending transfer -> accept_ownership rejects with VaultError::CallerIsNotPendingOwner (code 29).
+#[should_panic(expected = "Error(Contract, #29)")]
 fn test_accept_ownership_without_pending_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -650,7 +651,9 @@ fn test_cancel_without_pending_panics() {
 }
 
 #[test]
-#[should_panic(expected = "vault: no pending owner")]
+// #538: once a transfer is cancelled the pending state is cleared, so a later
+// accept_ownership rejects with VaultError::CallerIsNotPendingOwner (code 29).
+#[should_panic(expected = "Error(Contract, #29)")]
 fn test_accept_after_cancel_panics() {
     let env = Env::default();
     env.mock_all_auths();

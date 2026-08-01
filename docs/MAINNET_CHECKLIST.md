@@ -329,6 +329,81 @@ Set `TESTNET_VAULT_CONTRACT_ID`, `OWNER_ADDRESS`, and `NEW_WASM_HASH` (the hex h
 
 ---
 
+## 9. Harvest Cooldown & Circuit-Breaker Configuration
+
+The `harvest()` entry-point reuses the same `MinRebalanceInterval` / `LastRebalanceLedger`
+cooldown mechanism as `rebalance()`.  An incorrectly set cooldown can either allow runaway
+harvesting (too low) or lock the AI agent out of yield compounding (too high).  The
+circuit-breaker (`MaxConsecutiveFailures`) automatically suspends the agent when the configured
+threshold of consecutive protocol failures is reached, preventing a stuck external pool from
+draining gas indefinitely.
+
+### 🔍 Security Context
+
+* **Harvest cooldown** — `harvest()` checks `LastRebalanceLedger` before executing.  If the
+  elapsed ledgers since the last rebalance or harvest is below `MinRebalanceInterval`, the call
+  panics with `VaultError::RebalanceCooldownActive` (Error Code `43`).  A zero interval disables
+  the guard entirely.
+* **Circuit-breaker** — after `MaxConsecutiveFailures` successive protocol errors the agent is
+  suspended.  The default (`DEFAULT_MAX_CONSECUTIVE_FAILURES`) is applied when the vault was
+  initialized before the circuit-breaker feature shipped.  Setting the threshold to `0` disables
+  the breaker (not recommended in production).
+
+### 📝 Actionable Checklist
+
+- [ ] **Choose a harvest cooldown interval.** A typical starting point is 720 ledgers (≈ 1 hour).
+  Set it with:
+  ```bash
+  stellar contract invoke \
+    --id $VAULT_CONTRACT_ID \
+    --source owner \
+    --network mainnet \
+    -- \
+    set_rebalance_cooldown \
+    --interval 720
+  ```
+- [ ] **Verify the cooldown is stored correctly:**
+  ```bash
+  stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_rebalance_cooldown
+  # Expected: 720 (or whatever value you configured)
+  ```
+- [ ] **Verify `harvest()` respects the cooldown.** Immediately after a harvest, attempt a second
+  call from the agent key.
+  * *Expected Result:* MUST fail with `VaultError::RebalanceCooldownActive` (Error Code `43`).
+- [ ] **Choose a circuit-breaker threshold.** A value of `3`–`5` is recommended; this trips
+  automatic suspension after that many consecutive protocol failures without blocking normal
+  operations during transient outages.
+  ```bash
+  stellar contract invoke \
+    --id $VAULT_CONTRACT_ID \
+    --source owner \
+    --network mainnet \
+    -- \
+    set_max_consecutive_failures \
+    --threshold 5
+  ```
+- [ ] **Verify the circuit-breaker threshold:**
+  ```bash
+  stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_max_consecutive_failures
+  # Expected: 5
+  ```
+- [ ] **Confirm the circuit-breaker trips correctly on testnet.** Simulate consecutive harvest
+  failures (e.g., by draining the Blend pool mock) and confirm that after `threshold` failures the
+  agent is suspended and subsequent calls revert.
+
+> **Automated check** — add `EXPECTED_REBALANCE_COOLDOWN` and `EXPECTED_MAX_CONSECUTIVE_FAILURES`
+> to the `verify-deployment.sh` invocation to assert both values in one step:
+> ```bash
+> VAULT_CONTRACT_ID=C... NETWORK=mainnet \
+>   OWNER_ADDRESS=G... AGENT_ADDRESS=G... AGENT_SECRET_KEY=S... \
+>   USDC_TOKEN_ADDRESS=G... \
+>   EXPECTED_REBALANCE_COOLDOWN=720 \
+>   EXPECTED_MAX_CONSECUTIVE_FAILURES=5 \
+>   ./scripts/verify-deployment.sh
+> ```
+
+---
+
 ## 8. Third-Party Security Audit & Formal Sign-off
 
 No smart contract should be deployed on-chain without an independent security audit and formal sign-off.

@@ -242,7 +242,7 @@ fuzz_target!(|data: &[u8]| {
 
                 // ── Verify invariants ──
                 let actual_upgrade = client.get_pending_upgrade();
-                match (upgrade_pending_hash, upgrade_pending_expiry) {
+                match (upgrade_pending_hash.clone(), upgrade_pending_expiry) {
                     (Some(_), Some(expiry)) => {
                         assert!(
                             actual_upgrade.is_some(),

@@ -91,3 +91,8 @@ pub const TOPIC_UPGRADE_CANCELLED: Symbol = symbol_short!("upg_cncl");
 pub const TOPIC_REBALANCE_COOLDOWN_UPDATED: Symbol = symbol_short!("reb_cd");
 /// Topic for `ApprovalTtlUpdatedEvent`, published by `set_approval_ttl`.
 pub const TOPIC_APPROVAL_TTL_UPDATED: Symbol = symbol_short!("ttl_upd");
+/// Topic for `HarvestEvent`, published when accrued yield is harvested and compounded.
+pub const TOPIC_HARVEST: Symbol = symbol_short!("harvest");
+/// Topic for `EmergencyHarvestEvent`, published when the owner triggers an
+/// emergency harvest fallback during an agent-key outage or rotation.
+pub const TOPIC_EMERGENCY_HARVEST: Symbol = symbol_short!("em_harv");

@@ -13,6 +13,7 @@ mod test_budget;
 mod test_checked_arithmetic;
 mod test_circuit_breaker;
 mod test_deposit;
+mod test_emergency_harvest;
 #[cfg(feature = "dex-devnet")]
 mod test_dex_devnet;
 mod test_dex_integration;
