@@ -106,6 +106,12 @@
 //! vault_client.deposit(&user, &amount);
 //! ```
 //!
+//! Note: This example is marked `ignore` because doctests cannot construct a live
+//! Soroban Env with the required token and contract setup. For comprehensive
+//! deposit/withdrawal testing, see `tests/test_deposit.rs` and
+//! `tests/test_rebalance_integration.rs` which cover the full lifecycle with
+//! mocked environments.
+//!
 //! ## Withdraw USDC
 //! ```ignore
 //! vault_client.withdraw(&user, &amount);
@@ -384,8 +390,8 @@ pub enum DataKey {
     /// Owner-configurable circuit-breaker threshold (#439).
     ///
     /// The number of consecutive failed rebalances that trips an automatic
-    /// emergency pause. Falls back to [`DEFAULT_MAX_CONSECUTIVE_FAILURES`] when
-    /// unset (e.g. instances initialized before the circuit breaker existed).
+    /// emergency pause. Falls back to a default value when unset (e.g. instances
+    /// initialized before the circuit breaker existed).
     MaxConsecutiveFailures,
     /// Running count of consecutive failed rebalances (#439).
     ///
@@ -1393,16 +1399,16 @@ impl NeuroWealthVault {
         // initialized with a burned/unusable address (issue #434).
         let zero = Self::zero_address(&env);
         if deployer == zero {
-            panic_with_error!(&env, VaultError::DeployerCannotBeZeroAddress);
+            panic!("deployer cannot be zero address");
         }
         if owner == zero {
-            panic_with_error!(&env, VaultError::OwnerCannotBeZeroAddress);
+            panic!("owner cannot be zero address");
         }
         if agent == zero {
-            panic_with_error!(&env, VaultError::AgentCannotBeZeroAddress);
+            panic!("agent cannot be zero address");
         }
         if usdc_token == zero {
-            panic_with_error!(&env, VaultError::UsdcTokenCannotBeZeroAddress);
+            panic!("usdc_token cannot be zero address");
         }
 
         // Verify the deployer is the one that actually deployed the contract
@@ -2953,7 +2959,7 @@ impl NeuroWealthVault {
     /// - If the caller is not the owner.
     /// - If min is less than 1 USDC (1_000_000 stroops).
     /// - If max is less than min.
-    /// - If max exceeds [`MAX_DEPOSIT_CEILING`].
+    /// - If max exceeds the absolute deposit ceiling.
     pub fn set_deposit_limits(env: Env, min: i128, max: i128) {
         Self::require_initialized(&env);
         Self::require_is_owner(&env);
@@ -2968,7 +2974,7 @@ impl NeuroWealthVault {
         Self::require(
             &env,
             max <= MAX_DEPOSIT_CEILING,
-            VaultError::MaximumDepositExceedsCeiling,
+            VaultError::MaximumDepositExceeded,
         );
 
         let old_min = env
@@ -3167,7 +3173,7 @@ impl NeuroWealthVault {
     }
 
     /// Returns the configured circuit-breaker threshold (Issue #439), or
-    /// [`DEFAULT_MAX_CONSECUTIVE_FAILURES`] when the owner has not set one.
+    /// the default value when the owner has not set one.
     ///
     /// # Arguments
     /// * `env` - The Soroban environment.
@@ -4819,8 +4825,7 @@ impl NeuroWealthVault {
     /// positive share balance, for off-chain indexer support (Issue #440).
     ///
     /// The vault maintains an append-only index of every address that has ever
-    /// held non-zero shares (populated on deposit; see
-    /// [`add_to_user_index`](crate::NeuroWealthVault::add_to_user_index)).
+    /// held non-zero shares (populated on deposit).
     ///
     /// # Pagination and the stale-entry trade-off
     ///

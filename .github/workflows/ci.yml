@@ -114,7 +114,7 @@ jobs:
               cargo test --verbose
               ;;
             doc)
-              cargo doc --no-deps
+              RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
               ;;
             vault-client-typecheck)
               npm ci
@@ -152,25 +152,7 @@ jobs:
               fi
 
               if [ -f "$BASELINE_FILE" ]; then
-                BASELINE_SIZE=$(python3 - "$BASELINE_FILE" "$BASE_BRANCH" <<'PY'
-import json
-import sys
-
-path, branch = sys.argv[1], sys.argv[2]
-try:
-    with open(path, encoding="utf-8") as handle:
-        data = json.load(handle)
-except (FileNotFoundError, json.JSONDecodeError):
-    print("")
-    raise SystemExit(0)
-
-entry = data.get(branch, {}).get("latest")
-if entry:
-    print(entry.get("size_bytes", ""))
-else:
-    print("")
-PY
-)
+                BASELINE_SIZE=$(python3 - "$BASELINE_FILE" "$BASE_BRANCH" -c "import json, sys; path, branch = sys.argv[1], sys.argv[2]; data = json.load(open(path)) if open(path) else {}; entry = data.get(branch, {}).get('latest'); print(entry.get('size_bytes', '') if entry else '')")
               fi
 
               if [ -n "$BASELINE_SIZE" ]; then
@@ -210,45 +192,7 @@ PY
               fi
 
               if [ "$GITHUB_EVENT_NAME" = "push" ] && { [ "$GITHUB_REF_NAME" = "main" ] || [ "$GITHUB_REF_NAME" = "develop" ]; }; then
-                python3 - "$WASM_SIZE" "$GITHUB_SHA" "$GITHUB_REF_NAME" "$BASELINE_FILE" <<'PY'
-import json
-import os
-import subprocess
-import sys
-from datetime import datetime, timezone
-
-size, sha, branch, path = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
-
-payload = {}
-if os.path.exists(path):
-    with open(path, encoding="utf-8") as handle:
-        payload = json.load(handle)
-
-history = payload.get(branch, {}).get("history", [])
-history.append({"sha": sha, "size_bytes": size})
-updated_history = history[-20:]
-
-payload[branch] = {
-    "latest": {
-        "sha": sha,
-        "size_bytes": size,
-        "timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    },
-    "history": updated_history,
-}
-
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump(payload, handle, indent=2)
-    handle.write("\n")
-
-subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
-subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
-subprocess.run(["git", "add", path], check=True)
-
-if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0:
-    subprocess.run(["git", "commit", "-m", f"chore(ci): update wasm size baseline for {branch}"], check=True)
-    subprocess.run(["git", "push", "origin", f"HEAD:{branch}"], check=True)
-PY
+                python3 scripts/update_wasm_baseline.py "$WASM_SIZE" "$GITHUB_SHA" "$GITHUB_REF_NAME" "$BASELINE_FILE"
               fi
 
               # Export the WASM path for the artifact upload step.
