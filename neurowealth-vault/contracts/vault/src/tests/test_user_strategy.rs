@@ -77,6 +77,46 @@ fn test_invalid_strategy_rejected() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #47)")]
+fn test_empty_strategy_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_contract_id, client, _agent, _usdc_token) = setup(&env);
+    let user = Address::generate(&env);
+    client.set_user_strategy(&user, &Symbol::new(&env, ""));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #47)")]
+fn test_uppercase_strategy_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_contract_id, client, _agent, _usdc_token) = setup(&env);
+    let user = Address::generate(&env);
+    client.set_user_strategy(&user, &Symbol::new(&env, "CONSERVATIVE"));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #47)")]
+fn test_mixed_case_strategy_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_contract_id, client, _agent, _usdc_token) = setup(&env);
+    let user = Address::generate(&env);
+    client.set_user_strategy(&user, &Symbol::new(&env, "Balanced"));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #47)")]
+fn test_symbol_longer_than_nine_chars_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_contract_id, client, _agent, _usdc_token) = setup(&env);
+    let user = Address::generate(&env);
+    client.set_user_strategy(&user, &Symbol::new(&env, "safeststrategy"));
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #36)")]
 fn test_set_strategy_before_init_panics() {
     let env = Env::default();
