@@ -3,7 +3,8 @@
 extern crate std;
 
 use super::utils::*;
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
+use crate::{EmergencyPausedEvent, VaultPausedEvent, TOPIC_EMERGENCY_PAUSED, TOPIC_PAUSED};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, TryFromVal};
 
 #[test]
 fn test_owner_can_pause() {
@@ -150,12 +151,13 @@ fn test_pause_emits_event() {
 
     client.pause(&owner);
 
-    let pause_events = find_events_by_topic(
-        env.events().all(),
-        &env,
-        soroban_sdk::symbol_short!("paused"),
-    );
-    assert!(!pause_events.is_empty(), "Pause should emit an event");
+    let pause_events = find_events_by_topic(env.events().all(), &env, TOPIC_PAUSED);
+    assert_eq!(pause_events.len(), 1, "Exactly one paused event should be emitted");
+
+    let (_, _, data) = &pause_events[0];
+    let event = VaultPausedEvent::try_from_val(&env, data)
+        .expect("Should be a valid VaultPausedEvent");
+    assert_eq!(event.owner, owner, "Event owner should match caller");
 }
 
 #[test]
@@ -168,14 +170,150 @@ fn test_emergency_pause_emits_event() {
 
     client.emergency_pause(&owner);
 
-    let emergency_events = find_events_by_topic(
+    let emergency_events = find_events_by_topic(env.events().all(), &env, TOPIC_EMERGENCY_PAUSED);
+    assert_eq!(
+        emergency_events.len(), 1,
+        "Exactly one emergency paused event should be emitted"
+    );
+
+    let (_, _, data) = &emergency_events[0];
+    let event = EmergencyPausedEvent::try_from_val(&env, data)
+        .expect("Should be a valid EmergencyPausedEvent");
+    assert_eq!(event.owner, owner, "Event owner should match caller");
+}
+
+#[test]
+fn test_emergency_pause_idempotent() {
+    // Verifies that calling emergency_pause() when already paused
+    // does not panic and does not emit a second event (Issue #534).
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, _usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    assert!(!client.is_paused());
+
+    // First call — must pause and emit exactly one event
+    client.emergency_pause(&owner);
+    assert!(client.is_paused());
+
+    let events_after_first = find_events_by_topic(
         env.events().all(),
         &env,
         soroban_sdk::symbol_short!("emerg"),
     );
+    assert_eq!(
+        events_after_first.len(),
+        1,
+        "first emergency_pause must emit exactly one event"
+    );
+
+    // Second call — must NOT panic, must NOT emit a second event
+    client.emergency_pause(&owner);
     assert!(
-        !emergency_events.is_empty(),
-        "Emergency pause should emit an event"
+        client.is_paused(),
+        "paused state must remain unchanged after second call"
+    );
+
+    let events_after_second = find_events_by_topic(
+        env.events().all(),
+        &env,
+        soroban_sdk::symbol_short!("emerg"),
+    );
+    assert_eq!(
+        events_after_second.len(),
+        1,
+        "second emergency_pause must NOT emit a duplicate event"
+    );
+}
+
+// ============================================================================
+// ISSUE #508: Circuit-breaker auto-pause distinguishable from owner pause
+// ============================================================================
+
+#[test]
+fn test_auto_pause_emits_different_event_than_owner_pause() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // --- Part 1: owner-initiated pause emits VaultPausedEvent (topic "paused") ---
+    let (contract_id, _agent, owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.pause(&owner);
+    assert!(client.is_paused());
+
+    let pause_events = find_events_by_topic(env.events().all(), &env, TOPIC_PAUSED);
+    assert!(
+        !pause_events.is_empty(),
+        "owner pause must emit at least one VaultPausedEvent"
+    );
+    // Verify the last event is a VaultPausedEvent
+    let (_, _, data) = pause_events.last().unwrap();
+    let event = VaultPausedEvent::try_from_val(&env, data)
+        .expect("owner pause event must decode as VaultPausedEvent");
+    assert_eq!(event.owner, owner);
+
+    // Ensure no EmergencyPausedEvent was emitted by this pause
+    let emerg_events_after_pause =
+        find_events_by_topic(env.events().all(), &env, TOPIC_EMERGENCY_PAUSED);
+    assert_eq!(
+        emerg_events_after_pause.len(),
+        0,
+        "owner pause must NOT emit EmergencyPausedEvent"
+    );
+
+    // --- Part 2: circuit-breaker auto-pause emits EmergencyPausedEvent (topic "emerg") ---
+    // Deploy a fresh vault with Blend so the circuit breaker can fire.
+    let (contract_id2, _agent2, owner2, usdc_token2, blend_pool2) =
+        setup_vault_with_token_and_blend(&env);
+    let client2 = NeuroWealthVaultClient::new(&env, &contract_id2);
+    let blend_client = MockBlendPoolClient::new(&env, &blend_pool2);
+
+    client2.set_blend_pool(&owner2, &blend_pool2);
+    blend_client.set_max_supply_limit(&-1_i128); // force every rebalance to "fail"
+
+    let user = Address::generate(&env);
+    mint_and_deposit(&env, &client2, &usdc_token2, &user, 10_000_000_i128);
+
+    // Record events before triggering the circuit breaker.
+    let emerg_before =
+        find_events_by_topic(env.events().all(), &env, TOPIC_EMERGENCY_PAUSED).len();
+
+    // Three consecutive failures trip the default threshold (3).
+    client2.rebalance(&soroban_sdk::symbol_short!("blend"), &500_i128, &0_i128);
+    client2.rebalance(&soroban_sdk::symbol_short!("blend"), &500_i128, &0_i128);
+    client2.rebalance(&soroban_sdk::symbol_short!("blend"), &500_i128, &0_i128);
+    assert!(client2.is_paused(), "circuit breaker must pause the vault");
+
+    // Exactly one new EmergencyPausedEvent must have been emitted.
+    let emerg_events =
+        find_events_by_topic(env.events().all(), &env, TOPIC_EMERGENCY_PAUSED);
+    assert_eq!(
+        emerg_events.len(),
+        emerg_before + 1,
+        "circuit-breaker auto-pause must emit exactly one EmergencyPausedEvent"
+    );
+    let (_, _, data) = emerg_events.last().unwrap();
+    let event = EmergencyPausedEvent::try_from_val(&env, data)
+        .expect("auto-pause event must decode as EmergencyPausedEvent");
+    assert_eq!(event.owner, owner2);
+
+    // Ensure no VaultPausedEvent was emitted by the circuit breaker.
+    let pause_events_after_circuit =
+        find_events_by_topic(env.events().all(), &env, TOPIC_PAUSED);
+    // The owner2 vault has no pause events (we only called rebalance, not pause).
+    assert_eq!(
+        pause_events_after_circuit.len(),
+        0,
+        "circuit-breaker auto-pause must NOT emit VaultPausedEvent"
+    );
+
+    // The topics themselves are different: "paused" vs "emerg".
+    assert_ne!(
+        TOPIC_PAUSED, TOPIC_EMERGENCY_PAUSED,
+        "TOPIC_PAUSED and TOPIC_EMERGENCY_PAUSED must be distinct symbols"
     );
 }
 
@@ -196,7 +334,7 @@ fn test_upgrade_blocked_while_paused() {
     assert!(client.is_paused());
 
     let fake_hash = BytesN::from_array(&env, &[0u8; 32]);
-    client.upgrade(&owner, &fake_hash);
+    client.schedule_upgrade(&owner, &fake_hash);
 }
 
 #[test]
@@ -215,5 +353,66 @@ fn test_upgrade_unpaused_vault_clears_pause_guard() {
     assert!(
         !client.is_paused(),
         "vault must be unpaused before upgrade is allowed"
+    );
+}
+
+#[test]
+fn test_emergency_pause_blocks_operations_and_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+
+    let user = Address::generate(&env);
+    let amount = 5_000_000_i128;
+
+    // Pre-fund the user and deposit some tokens to test withdrawal later
+    token_client.mint(&user, &amount);
+    client.deposit(&user, &amount);
+
+    assert!(!client.is_paused());
+
+    // 1. Calls emergency_pause as owner
+    client.emergency_pause(&owner);
+
+    // 2. Asserts is_paused() returns true
+    assert!(client.is_paused(), "Vault should be emergency paused");
+
+    // 3. Verifies the emitted event topic is "emerg"
+    let emergency_events = find_events_by_topic(env.events().all(), &env, TOPIC_EMERGENCY_PAUSED);
+    assert_eq!(
+        emergency_events.len(), 1,
+        "Exactly one emergency paused event should be emitted"
+    );
+    assert_eq!(
+        TOPIC_EMERGENCY_PAUSED,
+        soroban_sdk::symbol_short!("emerg"),
+        "Event topic must be 'emerg'"
+    );
+
+    // 4. Asserts a deposit attempt panics with VaultError::Paused (#35)
+    let deposit_res = client.try_deposit(&user, &amount);
+    assert_eq!(
+        deposit_res,
+        Err(Ok(soroban_sdk::Error::from_contract_error(35))),
+        "deposit attempt should panic with VaultError::Paused (#35)"
+    );
+
+    // 5. Asserts a withdrawal attempt panics with VaultError::Paused (#35)
+    let withdraw_res = client.try_withdraw(&user, &amount);
+    assert_eq!(
+        withdraw_res,
+        Err(Ok(soroban_sdk::Error::from_contract_error(35))),
+        "withdrawal attempt should panic with VaultError::Paused (#35)"
+    );
+
+    // 6. Asserts a rebalance attempt panics with VaultError::Paused (#35)
+    let rebalance_res = client.try_rebalance(&soroban_sdk::symbol_short!("blend"), &500_i128, &0_i128);
+    assert_eq!(
+        rebalance_res,
+        Err(Ok(soroban_sdk::Error::from_contract_error(35))),
+        "rebalance attempt should panic with VaultError::Paused (#35)"
     );
 }

@@ -1,4 +1,11 @@
 //! Shared test utilities for NeuroWealth Vault tests
+//!
+//! # Token Mock
+//!
+//! [`token::TestToken`] / [`TestTokenClient`] is the **single canonical mock token**
+//! used across all unit and integration tests.  No other test module should define
+//! its own token contract — import this one via `use super::utils::*;` instead.
+//! Closes issue #288.
 
 extern crate std;
 
@@ -30,6 +37,9 @@ enum BlendMockDataKey {
     MaxSupplyLimit,
     /// Configurable max withdraw limit per transaction (0 = no limit)
     MaxWithdrawLimit,
+    /// Override the return value of submit_with_allowance without changing the
+    /// actual transferred amount. Used to test balance-delta accounting.
+    ReportedSupplyOverride,
 }
 
 #[derive(Clone)]
@@ -41,6 +51,9 @@ enum DexMockDataKey {
     MaxSupplyLimit,
     /// Configurable max withdraw limit per transaction (0 = no limit)
     MaxWithdrawLimit,
+    /// Override the return value of add_liquidity without changing actual transfer amount.
+    /// When set, add_liquidity reports this value instead of actual_amount.
+    ReportedSupplyOverride,
 }
 
 pub mod token {
@@ -241,7 +254,11 @@ pub mod blend {
 
             from.clone().require_auth();
 
-            actual_amount
+            let override_amount: Option<i128> = env
+                .storage()
+                .persistent()
+                .get(&BlendMockDataKey::ReportedSupplyOverride);
+            override_amount.unwrap_or(actual_amount)
         }
 
         /// Sets a max supply limit to simulate pool shortfall scenarios.
@@ -250,6 +267,16 @@ pub mod blend {
             env.storage()
                 .persistent()
                 .set(&BlendMockDataKey::MaxSupplyLimit, &limit);
+        }
+
+        /// Makes submit_with_allowance report `reported` as the return value
+        /// regardless of how much was actually transferred. Used to test that
+        /// the vault measures outcome via balance-delta rather than trusting the
+        /// pool's return value.
+        pub fn set_reported_supply_amount(env: Env, reported: i128) {
+            env.storage()
+                .persistent()
+                .set(&BlendMockDataKey::ReportedSupplyOverride, &reported);
         }
 
         /// Sets a max withdraw limit to simulate withdrawal failures/stuck funds.
@@ -415,7 +442,21 @@ pub mod dex {
                 );
             }
 
-            actual_amount
+            // If a lying override is set, report that instead of the actual amount.
+            let override_amount: Option<i128> = env
+                .storage()
+                .persistent()
+                .get(&DexMockDataKey::ReportedSupplyOverride);
+            override_amount.unwrap_or(actual_amount)
+        }
+
+        /// Makes add_liquidity report `reported` as the return value regardless of
+        /// how much was actually transferred. Used to test that the vault measures
+        /// outcome via balance-delta rather than trusting the pool's return value.
+        pub fn set_reported_supply_amount(env: Env, reported: i128) {
+            env.storage()
+                .persistent()
+                .set(&DexMockDataKey::ReportedSupplyOverride, &reported);
         }
 
         pub fn remove_liquidity(
@@ -463,10 +504,14 @@ pub mod dex {
 
         /// Returns the liquidity position held for `_user` in `asset`.
         pub fn balance(env: Env, asset: Address, _user: Address) -> i128 {
-            env.storage()
+            let supplied: i128 = env
+                .storage()
                 .persistent()
-                .get(&DexMockDataKey::Supplied(asset))
-                .unwrap_or(0)
+                .get(&DexMockDataKey::Supplied(asset.clone()))
+                .unwrap_or(0);
+            let token_bal =
+                TestTokenClient::new(&env, &asset).balance(&env.current_contract_address());
+            core::cmp::max(supplied, token_bal)
         }
 
         /// Sets a max supply limit to simulate slippage / partial fills.

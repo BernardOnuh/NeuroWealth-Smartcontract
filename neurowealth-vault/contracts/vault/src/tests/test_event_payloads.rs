@@ -15,16 +15,19 @@
 use super::utils::*;
 use crate::{
     AgentUpdatedEvent, AssetsUpdatedEvent, CapsUpdatedEvent, DepositEvent,
-    DepositLimitsUpdatedEvent, EmergencyPausedEvent, OwnershipTransferCancelledEvent,
-    OwnershipTransferInitiatedEvent, OwnershipTransferredEvent, RebalanceEvent,
-    TvlCapUpdatedEvent, UserDepositCapUpdatedEvent, VaultInitializedEvent, VaultPausedEvent,
-    VaultUnpausedEvent, WithdrawEvent, TOPIC_AGENT_UPDATED, TOPIC_ASSETS_UPDATED,
-    TOPIC_CAPS_UPDATED, TOPIC_DEPOSIT, TOPIC_DEPOSIT_LIMITS_UPDATED, TOPIC_EMERGENCY_PAUSED,
+    DepositLimitsUpdatedEvent, DexPoolConfiguredEvent, DexSupplyEvent, DexWithdrawEvent,
+    EmergencyPausedEvent, OwnershipTransferCancelledEvent, OwnershipTransferInitiatedEvent,
+    OwnershipTransferredEvent, RebalanceEvent, TvlCapUpdatedEvent, UserDepositCapUpdatedEvent,
+    VaultInitializedEvent, VaultPausedEvent, VaultUnpausedEvent, WithdrawEvent, TOPIC_AGENT_UPDATED,
+    TOPIC_ASSETS_UPDATED, TOPIC_CAPS_UPDATED, TOPIC_DEPOSIT, TOPIC_DEPOSIT_LIMITS_UPDATED,
+    TOPIC_DEX_POOL_CONFIGURED, TOPIC_DEX_SUPPLY, TOPIC_DEX_WITHDRAW, TOPIC_EMERGENCY_PAUSED,
     TOPIC_INIT, TOPIC_OWNERSHIP_CANCELLED, TOPIC_OWNERSHIP_INITIATED, TOPIC_OWNERSHIP_TRANSFERRED,
     TOPIC_PAUSED, TOPIC_REBALANCE, TOPIC_TVL_CAP_UPDATED, TOPIC_UNPAUSED, TOPIC_USER_CAP_UPDATED,
     TOPIC_WITHDRAW,
 };
-use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, TryFromVal};
+use soroban_sdk::{
+    symbol_short, testutils::Address as _, testutils::Ledger, Address, Env, TryFromVal,
+};
 
 // ── snapshot macro ────────────────────────────────────────────────────────────
 
@@ -49,7 +52,7 @@ fn snapshot_vault_initialized_event_all_fields() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (contract_id, agent, owner, usdc_token) = setup_vault_with_token(&env);
+    let (_contract_id, agent, owner, usdc_token) = setup_vault_with_token(&env);
 
     let events = find_events_by_topic(env.events().all(), &env, TOPIC_INIT);
     assert_eq!(events.len(), 1, "exactly one VaultInitializedEvent expected");
@@ -181,6 +184,78 @@ fn snapshot_rebalance_event_all_fields_noop() {
     snap!(event, amount_withdrawn, 0_i128, "RebalanceEvent");
 }
 
+#[test]
+fn snapshot_rebalance_event_with_blend_supply() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let user = Address::generate(&env);
+    let deposit_amount = 15_000_000_i128;
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
+
+    // Rebalance to Blend: should show amount_supplied
+    client.rebalance(&symbol_short!("blend"), &950_i128, &0_i128);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_REBALANCE);
+    assert_eq!(events.len(), 1, "exactly one RebalanceEvent expected");
+
+    let (_, _, data) = &events[0];
+    let event = RebalanceEvent::try_from_val(&env, data)
+        .expect("RebalanceEvent: try_from_val failed — schema may have drifted");
+
+    snap!(event, protocol, symbol_short!("blend"), "RebalanceEvent");
+    snap!(event, expected_apy, 950_i128, "RebalanceEvent");
+    snap!(event, status, symbol_short!("success"), "RebalanceEvent");
+    snap!(event, amount_attempted, deposit_amount, "RebalanceEvent");
+    snap!(event, amount_moved, deposit_amount, "RebalanceEvent");
+    snap!(event, amount_supplied, deposit_amount, "RebalanceEvent");
+    snap!(event, amount_withdrawn, 0_i128, "RebalanceEvent");
+}
+
+#[test]
+fn snapshot_rebalance_event_with_blend_withdrawal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, blend_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_blend_pool(&owner, &blend_pool);
+
+    let user = Address::generate(&env);
+    let deposit_amount = 20_000_000_i128;
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
+
+    // First supply to Blend
+    client.rebalance(&symbol_short!("blend"), &1100_i128, &0_i128);
+
+    // Then withdraw from Blend: should show amount_withdrawn
+    client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_REBALANCE);
+    assert_eq!(events.len(), 2, "two RebalanceEvents expected");
+
+    // Check the withdrawal event (second one)
+    let (_, _, data) = &events[1];
+    let event = RebalanceEvent::try_from_val(&env, data)
+        .expect("RebalanceEvent: try_from_val failed — schema may have drifted");
+
+    snap!(event, protocol, symbol_short!("none"), "RebalanceEvent");
+    snap!(event, expected_apy, 0_i128, "RebalanceEvent");
+    snap!(event, status, symbol_short!("success"), "RebalanceEvent");
+    snap!(event, amount_attempted, deposit_amount, "RebalanceEvent");
+    snap!(event, amount_moved, deposit_amount, "RebalanceEvent");
+    snap!(event, amount_supplied, 0_i128, "RebalanceEvent");
+    snap!(event, amount_withdrawn, deposit_amount, "RebalanceEvent");
+}
+
 // ── VaultPausedEvent ──────────────────────────────────────────────────────────
 
 #[test]
@@ -258,6 +333,8 @@ fn snapshot_tvl_cap_updated_event_all_fields() {
     // Default TVL cap is 100_000_000_000 (100M USDC)
     let old_cap: i128 = 100_000_000_000;
     let new_cap: i128 = 250_000_000_000;
+    let expected_ts: u64 = 123456789;
+    env.ledger().with_mut(|li| li.timestamp = expected_ts);
     client.set_tvl_cap(&new_cap);
 
     let events = find_events_by_topic(env.events().all(), &env, TOPIC_TVL_CAP_UPDATED);
@@ -269,6 +346,7 @@ fn snapshot_tvl_cap_updated_event_all_fields() {
 
     snap!(event, old_cap, old_cap, "TvlCapUpdatedEvent");
     snap!(event, new_cap, new_cap, "TvlCapUpdatedEvent");
+    snap!(event, timestamp, expected_ts, "TvlCapUpdatedEvent");
 }
 
 // ── UserDepositCapUpdatedEvent ────────────────────────────────────────────────
@@ -284,6 +362,8 @@ fn snapshot_user_deposit_cap_updated_event_all_fields() {
     // Default user deposit cap is 10_000_000_000 (10M USDC)
     let old_cap: i128 = 10_000_000_000;
     let new_cap: i128 = 20_000_000_000;
+    let expected_ts: u64 = 123456789;
+    env.ledger().with_mut(|li| li.timestamp = expected_ts);
     client.set_user_deposit_cap(&new_cap);
 
     let events = find_events_by_topic(env.events().all(), &env, TOPIC_USER_CAP_UPDATED);
@@ -295,6 +375,7 @@ fn snapshot_user_deposit_cap_updated_event_all_fields() {
 
     snap!(event, old_cap, old_cap, "UserDepositCapUpdatedEvent");
     snap!(event, new_cap, new_cap, "UserDepositCapUpdatedEvent");
+    snap!(event, timestamp, expected_ts, "UserDepositCapUpdatedEvent");
 }
 
 // ── CapsUpdatedEvent ──────────────────────────────────────────────────────────
@@ -479,6 +560,96 @@ fn snapshot_ownership_transfer_cancelled_event_all_fields() {
 
     snap!(event, owner, owner, "OwnershipTransferCancelledEvent");
     snap!(event, cancelled_pending, pending_owner, "OwnershipTransferCancelledEvent");
+}
+
+// ── DexSupplyEvent (#340) ─────────────────────────────────────────────────────
+
+#[test]
+fn snapshot_dex_supply_event_all_fields() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, dex_pool) = setup_vault_with_token_and_dex(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_dex_pool(&owner, &dex_pool);
+
+    let user = Address::generate(&env);
+    let deposit_amount = 15_000_000_i128;
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
+
+    // Supply to the DEX: emits DexSupplyEvent with the full amount.
+    client.rebalance(&symbol_short!("dex"), &950_i128, &0_i128);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_DEX_SUPPLY);
+    assert_eq!(events.len(), 1, "exactly one DexSupplyEvent expected");
+
+    let (_, _, data) = &events[0];
+    let event = DexSupplyEvent::try_from_val(&env, data)
+        .expect("DexSupplyEvent: try_from_val failed — schema may have drifted");
+
+    snap!(event, asset, usdc_token, "DexSupplyEvent");
+    snap!(event, amount_actual, deposit_amount, "DexSupplyEvent");
+    snap!(event, success, true, "DexSupplyEvent");
+}
+
+// ── DexWithdrawEvent (#340) ───────────────────────────────────────────────────
+
+#[test]
+fn snapshot_dex_withdraw_event_all_fields() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, usdc_token, dex_pool) = setup_vault_with_token_and_dex(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_dex_pool(&owner, &dex_pool);
+
+    let user = Address::generate(&env);
+    let deposit_amount = 20_000_000_i128;
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
+
+    // Supply to the DEX, then exit by rebalancing to "none": emits DexWithdrawEvent.
+    client.rebalance(&symbol_short!("dex"), &1100_i128, &0_i128);
+    client.rebalance(&symbol_short!("none"), &0_i128, &0_i128);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_DEX_WITHDRAW);
+    assert_eq!(events.len(), 1, "exactly one DexWithdrawEvent expected");
+
+    let (_, _, data) = &events[0];
+    let event = DexWithdrawEvent::try_from_val(&env, data)
+        .expect("DexWithdrawEvent: try_from_val failed — schema may have drifted");
+
+    snap!(event, asset, usdc_token, "DexWithdrawEvent");
+    snap!(event, amount_actual, deposit_amount, "DexWithdrawEvent");
+    snap!(event, success, true, "DexWithdrawEvent");
+}
+
+// ── DexPoolConfiguredEvent (#340) ─────────────────────────────────────────────
+
+#[test]
+fn snapshot_dex_pool_configured_event_all_fields() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, _usdc_token, dex_pool) =
+        setup_vault_with_token_and_dex(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    client.set_dex_pool(&owner, &dex_pool);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_DEX_POOL_CONFIGURED);
+    assert_eq!(events.len(), 1, "exactly one DexPoolConfiguredEvent expected");
+
+    let (_, _, data) = &events[0];
+    let event = DexPoolConfiguredEvent::try_from_val(&env, data)
+        .expect("DexPoolConfiguredEvent: try_from_val failed — schema may have drifted");
+
+    // First configuration: no previous pool.
+    let expected_old_pool: Option<Address> = None;
+    snap!(event, old_pool, expected_old_pool, "DexPoolConfiguredEvent");
+    snap!(event, new_pool, dex_pool, "DexPoolConfiguredEvent");
+    snap!(event, owner, owner, "DexPoolConfiguredEvent");
 }
 
 // ── Ordering regression ───────────────────────────────────────────────────────

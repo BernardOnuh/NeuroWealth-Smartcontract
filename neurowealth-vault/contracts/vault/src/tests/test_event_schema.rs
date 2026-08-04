@@ -8,15 +8,15 @@
 
 use super::utils::*;
 use crate::{
-    AgentUpdatedEvent, AssetsUpdatedEvent, BlendSupplyEvent, BlendWithdrawEvent, DepositEvent,
-    DepositLimitsUpdatedEvent, EmergencyPausedEvent, OwnershipTransferInitiatedEvent,
-    OwnershipTransferredEvent, ProtocolChangedEvent, RebalanceEvent, TvlCapUpdatedEvent,
-    UserDepositCapUpdatedEvent, VaultInitializedEvent, VaultPausedEvent, VaultUnpausedEvent,
-    WithdrawEvent, TOPIC_AGENT_UPDATED, TOPIC_ASSETS_UPDATED, TOPIC_BLEND_SUPPLY,
-    TOPIC_BLEND_WITHDRAW, TOPIC_DEPOSIT, TOPIC_DEPOSIT_LIMITS_UPDATED, TOPIC_EMERGENCY_PAUSED,
-    TOPIC_INIT, TOPIC_OWNERSHIP_INITIATED, TOPIC_OWNERSHIP_TRANSFERRED, TOPIC_PAUSED,
-    TOPIC_PROTOCOL_CHANGED, TOPIC_REBALANCE, TOPIC_TVL_CAP_UPDATED, TOPIC_UNPAUSED,
-    TOPIC_USER_CAP_UPDATED, TOPIC_WITHDRAW,
+    AgentUpdatedEvent, AssetsUpdatedEvent, BlendPoolConfiguredEvent, BlendSupplyEvent,
+    BlendWithdrawEvent, DepositEvent, DepositLimitsUpdatedEvent, EmergencyPausedEvent,
+    OwnershipTransferInitiatedEvent, OwnershipTransferredEvent, ProtocolChangedEvent,
+    RebalanceEvent, TvlCapUpdatedEvent, UserDepositCapUpdatedEvent, VaultInitializedEvent,
+    VaultPausedEvent, VaultUnpausedEvent, WithdrawEvent, TOPIC_AGENT_UPDATED,
+    TOPIC_ASSETS_UPDATED, TOPIC_BLEND_POOL_CONFIGURED, TOPIC_BLEND_SUPPLY, TOPIC_BLEND_WITHDRAW,
+    TOPIC_DEPOSIT, TOPIC_DEPOSIT_LIMITS_UPDATED, TOPIC_EMERGENCY_PAUSED, TOPIC_INIT,
+    TOPIC_OWNERSHIP_INITIATED, TOPIC_OWNERSHIP_TRANSFERRED, TOPIC_PAUSED, TOPIC_PROTOCOL_CHANGED,
+    TOPIC_REBALANCE, TOPIC_TVL_CAP_UPDATED, TOPIC_UNPAUSED, TOPIC_USER_CAP_UPDATED, TOPIC_WITHDRAW,
 };
 use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, TryFromVal};
 
@@ -450,6 +450,65 @@ fn test_event_schema_blend_events() {
     assert_eq!(withdraw_event.asset, usdc_token);
     assert_eq!(withdraw_event.amount_actual, 10_000_000_i128);
     assert!(withdraw_event.success);
+}
+
+/// Test that BlendPoolConfiguredEvent has correct topic and payload structure
+#[test]
+fn test_event_schema_blend_pool_configured() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, owner, _usdc_token, initial_pool) =
+        setup_vault_with_token_and_blend(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+
+    // Register a new Blend pool
+    let new_pool = env.register_contract(None, MockBlendPool);
+
+    // First configuration (old_pool should be None)
+    client.set_blend_pool(&owner, &initial_pool);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_BLEND_POOL_CONFIGURED);
+    assert_eq!(
+        events.len(),
+        1,
+        "Exactly one blend pool configured event should be emitted"
+    );
+
+    let (_, _, data) = &events[0];
+    let event = BlendPoolConfiguredEvent::try_from_val(&env, data)
+        .expect("Should be a valid BlendPoolConfiguredEvent");
+
+    // Verify payload structure for first configuration
+    assert_eq!(
+        event.old_pool, None,
+        "First configuration should have old_pool as None"
+    );
+    assert_eq!(event.new_pool, initial_pool);
+    assert_eq!(event.owner, owner);
+
+    // Second configuration (old_pool should be initial_pool)
+    client.set_blend_pool(&owner, &new_pool);
+
+    let events = find_events_by_topic(env.events().all(), &env, TOPIC_BLEND_POOL_CONFIGURED);
+    assert_eq!(
+        events.len(),
+        2,
+        "Two blend pool configured events should be emitted"
+    );
+
+    let (_, _, data) = &events[1];
+    let event = BlendPoolConfiguredEvent::try_from_val(&env, data)
+        .expect("Should be a valid BlendPoolConfiguredEvent");
+
+    // Verify payload structure for reconfiguration
+    assert_eq!(
+        event.old_pool,
+        Some(initial_pool),
+        "Reconfiguration should have old_pool set"
+    );
+    assert_eq!(event.new_pool, new_pool);
+    assert_eq!(event.owner, owner);
 }
 
 /// Comprehensive test that validates ALL expected event topics are present

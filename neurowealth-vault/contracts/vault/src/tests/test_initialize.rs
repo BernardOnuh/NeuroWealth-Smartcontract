@@ -1,7 +1,18 @@
 //! Tests for vault initialization
 
 use super::utils::*;
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
+use crate::{VaultInitializedEvent, TOPIC_INIT};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, TryFromVal};
+
+/// The canonical "burned" Stellar account (ed25519 public key of all zero
+/// bytes) used to exercise `initialize`'s zero-address rejection (Issue
+/// #434). Mirrors `NeuroWealthVault::zero_address` in `lib.rs`.
+fn zero_address(env: &Env) -> Address {
+    Address::from_string(&String::from_str(
+        env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ))
+}
 
 #[test]
 fn test_initialize_happy_path() {
@@ -117,12 +128,24 @@ fn test_initialize_emits_event() {
 
     client.initialize(&deployer, &owner, &agent, &usdc_token, &salt);
 
-    let events = env.events().all();
-    assert!(!events.is_empty(), "Initialization should emit an event");
+    let init_events = find_events_by_topic(env.events().all(), &env, TOPIC_INIT);
+    assert_eq!(
+        init_events.len(),
+        1,
+        "Exactly one init event should be emitted"
+    );
 
-    let init_events =
-        find_events_by_topic(env.events().all(), &env, soroban_sdk::symbol_short!("init"));
-    assert!(!init_events.is_empty(), "Should have initialization event");
+    let (_, _, data) = &init_events[0];
+    let event = VaultInitializedEvent::try_from_val(&env, data)
+        .expect("Should be a valid VaultInitializedEvent");
+    assert_eq!(
+        event.agent, agent,
+        "Event agent should match initialized agent"
+    );
+    assert_eq!(
+        event.usdc_token, usdc_token,
+        "Event usdc_token should match"
+    );
 }
 
 // ============================================================================
@@ -195,9 +218,8 @@ fn test_initialize_event_includes_owner_and_agent() {
 
     client.initialize(&deployer, &owner, &agent, &usdc_token, &salt);
 
-    let init_events =
-        find_events_by_topic(env.events().all(), &env, soroban_sdk::symbol_short!("init"));
-    assert!(!init_events.is_empty(), "init event must be emitted");
+    let init_events = find_events_by_topic(env.events().all(), &env, TOPIC_INIT);
+    assert_eq!(init_events.len(), 1, "init event must be emitted");
 
     // The event data is VaultInitializedEvent; verify it contains both roles
     // by confirming the stored values match what we passed in.
@@ -304,4 +326,96 @@ fn test_front_runner_with_own_address_as_deployer_is_rejected() {
         &usdc_token,
         &salt,
     );
+}
+
+// ============================================================================
+// ISSUE #434 — REJECT ZERO ADDRESS IN INITIALIZE()
+// ============================================================================
+
+#[test]
+#[should_panic(expected = "Error(Contract, #62)")]
+fn test_initialize_rejects_zero_deployer() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let deployer = zero_address(&env);
+    let salt = BytesN::from_array(&env, &[0u8; 32]);
+    let contract_id = env
+        .deployer()
+        .with_address(deployer.clone(), salt.clone())
+        .deployed_address();
+    env.register_contract(&contract_id, NeuroWealthVault);
+
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let agent = Address::generate(&env);
+    let owner = Address::generate(&env);
+    let usdc_token = Address::generate(&env);
+
+    client.initialize(&deployer, &owner, &agent, &usdc_token, &salt);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #63)")]
+fn test_initialize_rejects_zero_owner() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let deployer = Address::generate(&env);
+    let salt = BytesN::from_array(&env, &[0u8; 32]);
+    let contract_id = env
+        .deployer()
+        .with_address(deployer.clone(), salt.clone())
+        .deployed_address();
+    env.register_contract(&contract_id, NeuroWealthVault);
+
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let agent = Address::generate(&env);
+    let owner = zero_address(&env);
+    let usdc_token = Address::generate(&env);
+
+    client.initialize(&deployer, &owner, &agent, &usdc_token, &salt);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #64)")]
+fn test_initialize_rejects_zero_agent() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let deployer = Address::generate(&env);
+    let salt = BytesN::from_array(&env, &[0u8; 32]);
+    let contract_id = env
+        .deployer()
+        .with_address(deployer.clone(), salt.clone())
+        .deployed_address();
+    env.register_contract(&contract_id, NeuroWealthVault);
+
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let agent = zero_address(&env);
+    let owner = Address::generate(&env);
+    let usdc_token = Address::generate(&env);
+
+    client.initialize(&deployer, &owner, &agent, &usdc_token, &salt);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #65)")]
+fn test_initialize_rejects_zero_usdc_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let deployer = Address::generate(&env);
+    let salt = BytesN::from_array(&env, &[0u8; 32]);
+    let contract_id = env
+        .deployer()
+        .with_address(deployer.clone(), salt.clone())
+        .deployed_address();
+    env.register_contract(&contract_id, NeuroWealthVault);
+
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let agent = Address::generate(&env);
+    let owner = Address::generate(&env);
+    let usdc_token = zero_address(&env);
+
+    client.initialize(&deployer, &owner, &agent, &usdc_token, &salt);
 }

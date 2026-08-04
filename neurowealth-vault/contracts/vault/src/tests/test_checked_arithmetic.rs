@@ -6,7 +6,21 @@
 //! `i128::MAX` to actually exercise those guards.
 
 use super::utils::*;
+use crate::DataKey;
 use soroban_sdk::{testutils::Address as _, Address, Env};
+
+/// Sets `MinDeposit`/`MaxDeposit` directly in storage, bypassing
+/// `set_deposit_limits`'s owner-facing `MAX_DEPOSIT_CEILING` guard (issue
+/// #435). These boundary tests intentionally push `max` to `i128::MAX` to
+/// exercise checked-arithmetic guards deeper in the deposit/share-conversion
+/// path, which is a different concern than the ceiling validation on the
+/// admin entrypoint.
+fn set_deposit_limits_unchecked(env: &Env, contract_id: &Address, min: i128, max: i128) {
+    env.as_contract(contract_id, || {
+        env.storage().instance().set(&DataKey::MinDeposit, &min);
+        env.storage().instance().set(&DataKey::MaxDeposit, &max);
+    });
+}
 
 /// A single very large deposit (well within `i128`) succeeds and books shares
 /// exactly 1:1 on bootstrap — confirming the checked math handles large operands
@@ -22,7 +36,7 @@ fn test_large_deposit_within_range_succeeds() {
 
     // Disable per-user / TVL caps and raise the per-deposit max to allow a huge deposit.
     client.set_limits(&0, &0);
-    client.set_deposit_limits(&1_000_000_i128, &i128::MAX);
+    set_deposit_limits_unchecked(&env, &contract_id, 1_000_000_i128, i128::MAX);
 
     let user = Address::generate(&env);
     let amount = 1_000_000_000_000_000_000_i128; // 1e18, far below i128::MAX (~1.7e38)
@@ -54,7 +68,7 @@ fn test_convert_to_shares_mul_overflow_is_checked() {
     let token = TestTokenClient::new(&env, &usdc_token);
 
     client.set_limits(&0, &0);
-    client.set_deposit_limits(&1_000_000_i128, &i128::MAX);
+    set_deposit_limits_unchecked(&env, &contract_id, 1_000_000_i128, i128::MAX);
 
     // Bootstrap a large share supply: total_shares == total_assets == 1e18.
     let user = Address::generate(&env);
@@ -79,7 +93,7 @@ fn test_user_deposit_cap_boundary() {
 
     let cap = 100_000_000_i128;
     client.set_user_deposit_cap(&cap);
-    client.set_deposit_limits(&1_000_000_i128, &i128::MAX);
+    set_deposit_limits_unchecked(&env, &contract_id, 1_000_000_i128, i128::MAX);
 
     let user = Address::generate(&env);
     token.mint(&user, &(cap + 1_000_000));
@@ -123,7 +137,7 @@ fn test_large_balance_full_withdraw() {
     let token = TestTokenClient::new(&env, &usdc_token);
 
     client.set_limits(&0, &0);
-    client.set_deposit_limits(&1_000_000_i128, &i128::MAX);
+    set_deposit_limits_unchecked(&env, &contract_id, 1_000_000_i128, i128::MAX);
 
     let user = Address::generate(&env);
     let amount = 5_000_000_000_000_000_000_i128; // 5e18
@@ -151,7 +165,7 @@ fn test_update_total_assets_decrease_bound_overflow_is_checked() {
     let token = TestTokenClient::new(&env, &usdc_token);
 
     client.set_limits(&0, &0);
-    client.set_deposit_limits(&1_000_000_i128, &i128::MAX);
+    set_deposit_limits_unchecked(&env, &contract_id, 1_000_000_i128, i128::MAX);
 
     // Drive stored TotalAssets to i128::MAX via a max-sized deposit.
     let user = Address::generate(&env);
@@ -160,4 +174,53 @@ fn test_update_total_assets_decrease_bound_overflow_is_checked() {
 
     // Request a decrease: max_decrease = old_total(MAX) * bps(>=100) overflows.
     client.update_total_assets(&agent, &(i128::MAX - 1), &true, &100);
+}
+
+/// `get_exchange_rate` computes `total_assets * SCALAR / total_shares`.
+/// The division is now checked; this test verifies that a normal non-zero
+/// total_shares produces the correct rate without panicking (#318).
+#[test]
+fn test_exchange_rate_checked_div_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, _agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token = TestTokenClient::new(&env, &usdc_token);
+
+    let user = Address::generate(&env);
+    let amount = 10_000_000_i128; // 10 USDC
+    token.mint(&user, &amount);
+    client.deposit(&user, &amount);
+
+    // Bootstrap: 1:1, so rate = 10_000_000 (scalar = 10_000_000, rate = 1.0)
+    let rate = client.get_exchange_rate();
+    assert_eq!(
+        rate, 10_000_000_i128,
+        "bootstrap exchange rate should be 1:1 scaled"
+    );
+}
+
+/// A small but valid decrease within bps bounds uses `.checked_div(10_000)`
+/// and must produce the correct max-decrease ceiling without panicking (#318).
+#[test]
+fn test_update_total_assets_decrease_div_within_bounds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token = TestTokenClient::new(&env, &usdc_token);
+
+    let user = Address::generate(&env);
+    let amount = 10_000_000_i128; // 10 USDC
+    token.mint(&user, &amount);
+    client.deposit(&user, &amount);
+
+    // max_decrease_bps = 1000 (10 %), old_total = 10M
+    // max_decrease = 10M * 1000 / 10_000 = 1M
+    // new_total = 9M (decrease of 1M = exactly at the 10 % cap) — must succeed
+    let new_total = 9_000_000_i128;
+    client.update_total_assets(&agent, &new_total, &true, &1000);
+    assert_eq!(client.get_total_assets(), new_total);
 }

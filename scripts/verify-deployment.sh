@@ -34,8 +34,9 @@
 #   EXPECTED_MIN_DEPOSIT      — expected minimum deposit
 #   EXPECTED_MAX_DEPOSIT      — expected maximum deposit
 #
-# Optional Blend pool check:
+# Optional protocol pool checks:
 #   BLEND_POOL_ADDRESS    — if set, verifies get_blend_pool() matches this value
+#   DEX_POOL_ADDRESS      — if set, verifies get_dex_pool() matches this value
 #
 # Exit codes:
 #   0  — All checks passed
@@ -373,7 +374,89 @@ check_cap "get_min_deposit"      "EXPECTED_MIN_DEPOSIT"      "min deposit"
 check_cap "get_max_deposit"      "EXPECTED_MAX_DEPOSIT"      "max deposit"
 
 # ---------------------------------------------------------------------------
-# 8. Blend pool address (optional — skip if BLEND_POOL_ADDRESS not set)
+# 8. Additional getter coverage
+# ---------------------------------------------------------------------------
+
+USER_STRATEGY_OUTPUT=$(invoke_view "get_user_strategy" get_user_strategy "$OWNER_ADDRESS") || {
+  fail "get_user_strategy invocation failed"
+  USER_STRATEGY_OUTPUT=""
+}
+
+if [[ -n "$USER_STRATEGY_OUTPUT" ]]; then
+  USER_STRATEGY_NORM=$(normalize_address "$USER_STRATEGY_OUTPUT")
+  if [[ "$USER_STRATEGY_NORM" == "balanced" ]]; then
+    pass "get_user_strategy defaults to balanced"
+  else
+    fail "get_user_strategy unexpected value: $USER_STRATEGY_OUTPUT"
+  fi
+fi
+
+IDLE_OUTPUT=$(invoke_view "get_idle_balance" get_idle_balance) || {
+  fail "get_idle_balance invocation failed"
+  IDLE_OUTPUT=""
+}
+if [[ -n "$IDLE_OUTPUT" ]]; then
+  pass "get_idle_balance returned $IDLE_OUTPUT"
+fi
+
+DEPLOYED_OUTPUT=$(invoke_view "get_deployed_assets" get_deployed_assets) || {
+  fail "get_deployed_assets invocation failed"
+  DEPLOYED_OUTPUT=""
+}
+if [[ -n "$DEPLOYED_OUTPUT" ]]; then
+  pass "get_deployed_assets returned $DEPLOYED_OUTPUT"
+fi
+
+BREAKDOWN_OUTPUT=$(invoke_view "get_asset_breakdown" get_asset_breakdown) || {
+  fail "get_asset_breakdown invocation failed"
+  BREAKDOWN_OUTPUT=""
+}
+if [[ -n "$BREAKDOWN_OUTPUT" ]]; then
+  pass "get_asset_breakdown returned $BREAKDOWN_OUTPUT"
+fi
+
+REBALANCE_COOLDOWN_OUTPUT=$(invoke_view "get_rebalance_cooldown" get_rebalance_cooldown) || {
+  fail "get_rebalance_cooldown invocation failed"
+  REBALANCE_COOLDOWN_OUTPUT=""
+}
+if [[ -n "$REBALANCE_COOLDOWN_OUTPUT" ]]; then
+  pass "get_rebalance_cooldown returned $REBALANCE_COOLDOWN_OUTPUT"
+fi
+
+LAST_REBALANCE_LEDGER_OUTPUT=$(invoke_view "get_last_rebalance_ledger" get_last_rebalance_ledger) || {
+  fail "get_last_rebalance_ledger invocation failed"
+  LAST_REBALANCE_LEDGER_OUTPUT=""
+}
+if [[ -n "$LAST_REBALANCE_LEDGER_OUTPUT" ]]; then
+  pass "get_last_rebalance_ledger returned $LAST_REBALANCE_LEDGER_OUTPUT"
+fi
+
+APPROVAL_TTL_OUTPUT=$(invoke_view "get_approval_ttl" get_approval_ttl) || {
+  fail "get_approval_ttl invocation failed"
+  APPROVAL_TTL_OUTPUT=""
+}
+if [[ -n "$APPROVAL_TTL_OUTPUT" ]]; then
+  pass "get_approval_ttl returned $APPROVAL_TTL_OUTPUT"
+fi
+
+PENDING_AGENT_UPDATE_OUTPUT=$(invoke_view "get_pending_agent_update" get_pending_agent_update) || {
+  fail "get_pending_agent_update invocation failed"
+  PENDING_AGENT_UPDATE_OUTPUT=""
+}
+if [[ -n "$PENDING_AGENT_UPDATE_OUTPUT" ]]; then
+  pass "get_pending_agent_update returned $PENDING_AGENT_UPDATE_OUTPUT"
+fi
+
+PENDING_UPGRADE_OUTPUT=$(invoke_view "get_pending_upgrade" get_pending_upgrade) || {
+  fail "get_pending_upgrade invocation failed"
+  PENDING_UPGRADE_OUTPUT=""
+}
+if [[ -n "$PENDING_UPGRADE_OUTPUT" ]]; then
+  pass "get_pending_upgrade returned $PENDING_UPGRADE_OUTPUT"
+fi
+
+# ---------------------------------------------------------------------------
+# 9. Blend pool address (optional — skip if BLEND_POOL_ADDRESS not set)
 # ---------------------------------------------------------------------------
 
 if [[ -z "${BLEND_POOL_ADDRESS:-}" ]]; then
@@ -394,6 +477,33 @@ else
         pass "get_blend_pool matches BLEND_POOL_ADDRESS"
       else
         fail "get_blend_pool mismatch: on-chain=$BLEND_NORM expected=$EXPECTED_BLEND"
+      fi
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 10. DEX pool address (optional — skip if DEX_POOL_ADDRESS not set)
+# ---------------------------------------------------------------------------
+
+if [[ -z "${DEX_POOL_ADDRESS:-}" ]]; then
+  info "DEX pool check skipped — DEX_POOL_ADDRESS not set"
+else
+  DEX_OUTPUT=$(invoke_view "get_dex_pool" get_dex_pool) || {
+    fail "get_dex_pool invocation failed"
+    DEX_OUTPUT=""
+  }
+
+  if [[ -n "$DEX_OUTPUT" ]]; then
+    DEX_NORM=$(normalize_address "$DEX_OUTPUT")
+    if [[ "$DEX_NORM" == "null" || -z "$DEX_NORM" ]]; then
+      fail "get_dex_pool returned null — DEX pool not configured on-chain"
+    else
+      EXPECTED_DEX=$(normalize_address "$DEX_POOL_ADDRESS")
+      if [[ "$DEX_NORM" == "$EXPECTED_DEX" ]]; then
+        pass "get_dex_pool matches DEX_POOL_ADDRESS"
+      else
+        fail "get_dex_pool mismatch: on-chain=$DEX_NORM expected=$EXPECTED_DEX"
       fi
     fi
   fi

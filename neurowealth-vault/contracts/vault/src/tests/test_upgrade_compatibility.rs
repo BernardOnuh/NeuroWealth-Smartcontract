@@ -23,7 +23,7 @@
 use super::utils::*;
 use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, Ledger as _},
+    testutils::Address as _,
     Address, Env,
 };
 
@@ -174,7 +174,7 @@ fn test_current_protocol_key_survives_rebalance_transitions() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (vault_id, agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let (vault_id, _agent, _owner, usdc_token) = setup_vault_with_token(&env);
     let client = NeuroWealthVaultClient::new(&env, &vault_id);
 
     // Initial state: no rebalance yet — protocol is "none".

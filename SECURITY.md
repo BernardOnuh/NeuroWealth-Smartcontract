@@ -25,7 +25,6 @@ The owner **CANNOT**:
 The authorized AI agent has the following permissions:
 - **Rebalance**: Can call `rebalance()` to signal strategy changes and move funds between protocols
 - **Update Total Assets**: Can report yield accrual or strategy losses
-- **Emergency Pause**: Can trigger an immediate emergency pause if anomalies are detected
 - **Read Access**: Can read all vault state to make yield decisions
 
 The agent **CANNOT**:
@@ -33,6 +32,7 @@ The agent **CANNOT**:
 - Change vault configuration (caps, pools)
 - Access USDC tokens directly outside of protocol interactions
 - Modify user balances without valid asset reporting
+- Pause or unpause the vault (owner-only, including emergency pause)
 
 ### Users
 
@@ -64,11 +64,12 @@ Users can withdraw their USDC at any time without:
 
 ## Risk Analysis
 
-### 1. External Protocol Risk (Blend)
+### 1. External Protocol Risk (Blend & DEX)
 
-Integration with protocols like Blend introduces systemic risk:
-- **Liquidity Risk**: If Blend utilization is 100%, the vault cannot pull funds immediately. Users will experience partial withdrawals until liquidity returns to the protocol.
-- **Protocol Failure**: A bug or exploit in Blend could result in loss of deployed assets.
+The vault can route idle USDC into external protocols (`get_current_protocol` reports `idle`, `blend`, or `dex`). Each integration introduces systemic risk:
+- **Liquidity Risk (Blend)**: If Blend utilization is 100%, the vault cannot pull funds immediately. Users will experience partial withdrawals until liquidity returns to the protocol.
+- **Slippage & Liquidity Risk (DEX)**: When the active strategy is a DEX pool, withdrawals and strategy switches execute swaps. Thin pool liquidity can cause slippage or a failed switch; the low-liquidity strategy-switch path returns funds to idle rather than forcing an unfavorable swap.
+- **Protocol Failure**: A bug or exploit in Blend or the DEX could result in loss of deployed assets.
 
 ### 2. Asset Reporting Risk
 
@@ -76,26 +77,79 @@ The `update_total_assets` function used by the AI agent has built-in guardrails:
 - **Solvency Check**: The agent cannot inflate total assets beyond the combined balance of idle USDC and funds actually deployed to external protocols.
 - **Decrease Bounding**: Reporting a loss is capped (default 10% per call) to prevent sudden, massive devaluations from a single malicious or erroneous call.
 
-### 3. Upgrade Risks
+### 3. Agent Rebalance Risk
 
-The contract owner can upgrade the contract code. This introduces:
-- **Single Point of Failure**: The owner key is a high-value target.
-- **Mitigation**: Use multi-sig for the owner and timelocks for code upgrades.
+The AI agent can move funds between protocols via `rebalance()`, but is constrained:
+- **Rebalance Cooldown**: Consecutive rebalances are rate-limited by a configurable cooldown (`get_rebalance_cooldown` / `get_last_rebalance_ledger`), which bounds how quickly a compromised or malfunctioning agent can churn funds across protocols.
+- **No Direct Custody**: Rebalancing only moves funds between the vault's own positions in whitelisted pools; the agent cannot redirect funds to an arbitrary address.
+
+### 4. Upgrade Risks
+
+The contract owner can upgrade the contract code. To protect against malicious or accidental instant code changes, upgrade risk is mitigated via a mandatory two-step timelock mechanism:
+- **Two-Step Timelock**: Upgrades must first be scheduled via `schedule_upgrade(new_wasm_hash)`, initiating a timelock delay before `execute_upgrade()` can be called.
+- **Cancellation Window**: During the timelock window, the owner or security monitoring can invoke `cancel_upgrade()` to abort a compromised or erroneous upgrade proposal.
+- **Owner Multi-Sig Recommended**: For mainnet deployment, owner authority should be held by a multi-sig account.
+
+### 5. State Rent & TTL Expiry
+
+Soroban persistent entries (such as each user's `Shares` record) accrue state rent and expire if their TTL is not periodically extended:
+- **Pure Read-Only Getters**: `get_balance` and `get_shares` are side-effect free — they do **not** extend storage TTL. This keeps pure reads cheap and prevents read traffic from silently mutating ledger state.
+- **Explicit Maintenance**: Off-chain indexers or maintenance jobs should call the permissionless `touch_user_ttl(user)` to refresh a user's `Shares` TTL. State-changing calls (`deposit`, `withdraw`) already rewrite `Shares` and refresh its TTL during normal operation.
+- **Risk**: A long-dormant user who never transacts and whose entry is never touched could see their `Shares` entry expire and require restoration. Active users, and any indexer running `touch_user_ttl`, are unaffected.
 
 ## Access Control Summary
 
 | Function | Owner | Agent | User | Anyone |
 |----------|-------|-------|------|--------|
-| set_agent | ✅ | - | - | - |
-| update_total_assets | - | ✅ | - | - |
-| deposit | - | - | ✅ | - |
-| withdraw | - | - | ✅ | - |
-| rebalance | - | ✅ | - | - |
-| pause | ✅ | - | - | - |
-| emergency_pause | - | ✅ | - | - |
-| unpause | ✅ | - | - | - |
-| set_caps | ✅ | - | - | - |
-| upgrade | ✅ | - | - | - |
+| update_agent | yes | - | - | - |
+| confirm_agent_update | yes | - | - | - |
+| cancel_agent_update | yes | - | - | - |
+| update_total_assets | - | yes | - | - |
+| deposit | - | - | yes | - |
+| withdraw | - | - | yes | - |
+| withdraw_all | - | - | yes | - |
+| rebalance | - | yes | - | - |
+| pause | yes | - | - | - |
+| emergency_pause | yes | - | - | - |
+| unpause | yes | - | - | - |
+| set_caps | yes | - | - | - |
+| set_tvl_cap | yes | - | - | - |
+| set_user_deposit_cap | yes | - | - | - |
+| set_deposit_limits | yes | - | - | - |
+| set_limits | yes | - | - | - |
+| set_rebalance_cooldown | yes | - | - | - |
+| set_approval_ttl | yes | - | - | - |
+| set_blend_approval_ttl | yes | - | - | - |
+| schedule_upgrade | yes | - | - | - |
+| execute_upgrade | yes | - | - | - |
+| cancel_upgrade | yes | - | - | - |
+| set_blend_pool | yes | - | - | - |
+| set_dex_pool | yes | - | - | - |
+| transfer_ownership | yes | - | - | - |
+| cancel_ownership_transfer | yes | - | - | - |
+| accept_ownership | - | - | - | pending owner |
+| touch_user_ttl | - | - | - | anyone |
+| set_user_strategy | - | - | yes | - |
+
+### Emergency Harvest Fallback (Issue #506)
+
+When the agent key is lost, compromised, or mid-rotation via the
+`update_agent` timelock, the normal `harvest()` function is unusable because
+it requires agent authorization. The owner can call `emergency_harvest(min_out)`
+to compound yield during this window:
+
+- **Gating**: Owner auth only (not agent auth)
+- **Pause bypass**: Works even when the vault is paused, so the owner can
+  compound yield during an emergency pause without unpausing first
+- **Same mechanics**: Withdraws accrued yield from the active protocol and
+  re-supplies it (same round-trip as `harvest()`)
+- **Distinct event**: Emits `EmergencyHarvestEvent` (topic `em_harv`) so
+  indexers can differentiate from agent-initiated `HarvestEvent` (topic
+  `harvest`)
+
+| Function | Owner | Agent | User | Anyone |
+|----------|-------|-------|------|--------|
+| emergency_harvest | yes | - | - | - |
 
 ## Security Best Practices Implemented
 
@@ -126,18 +180,10 @@ stellar contract invoke \
 
 **Requires**: owner auth **[owner]**
 
-If the owner key is already confirmed compromised and you cannot sign with it,
-the authorized AI agent can also trigger `emergency_pause`:
-
-```bash
-stellar contract invoke \
-  --id $VAULT_CONTRACT_ID \
-  --source <AGENT_SECRET_KEY> \
-  --network mainnet \
-  -- emergency_pause
-```
-
-**Requires**: agent auth (use this path only if owner key is inaccessible).
+> **Note:** Unlike `pause`, the `emergency_pause` function also requires owner
+> auth. If the owner key is already confirmed compromised and you cannot sign
+> with it, see Step 2 to assess whether the attacker has already rotated
+> the owner address.
 
 ### Step 2 — Assess exposure
 
@@ -149,11 +195,13 @@ is still doing:
 | Current paused state | `stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_paused` |
 | Current owner address | `stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_owner` |
 | Current agent address | `stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_agent` |
+| Pending agent update | `stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_pending_agent_update` |
+| Pending contract upgrade | `stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_pending_upgrade` |
 | Active protocol (idle/blend/dex) | `stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_current_protocol` |
 | TVL cap | `stellar contract invoke --id $VAULT_CONTRACT_ID --network mainnet -- get_tvl_cap` |
 
 Owner-only actions an attacker with the key could have taken:
-- Called `set_agent` to replace the AI agent with a malicious address.
+- Initiated `update_agent` or `schedule_upgrade` to queue a malicious agent or WASM upgrade.
 - Called `set_blend_pool` or `set_dex_pool` to point the vault at a drain contract.
 - Called `set_caps` to raise or remove deposit limits.
 - Initiated `transfer_ownership` to a new address they control.
@@ -189,14 +237,25 @@ If the compromised key has already been used to initiate an attacker-controlled
 You must call `accept_ownership` from the *legitimate* new owner before the
 attacker does. Check `DataKey::PendingOwner` on-chain immediately.
 
-### Step 4 — Revert any attacker configuration changes
+### Step 4 — Revert any attacker configuration changes & pending timelocks
 
-Once the new owner key is in place, audit and reset all owner-controlled state:
+Once the new owner key is in place, audit and reset all owner-controlled state and cancel pending malicious timelocks:
 
 ```bash
-# Reset agent to the legitimate AI agent address [owner]
+# Cancel any pending malicious agent update or contract upgrade scheduled by attacker [owner]
 stellar contract invoke --id $VAULT_CONTRACT_ID --source <NEW_OWNER_KEY> \
-  --network mainnet -- set_agent --agent <LEGITIMATE_AGENT_ADDRESS>
+  --network mainnet -- cancel_agent_update
+
+stellar contract invoke --id $VAULT_CONTRACT_ID --source <NEW_OWNER_KEY> \
+  --network mainnet -- cancel_upgrade
+
+# Initiate and confirm agent update to legitimate AI agent address via timelock [owner]
+stellar contract invoke --id $VAULT_CONTRACT_ID --source <NEW_OWNER_KEY> \
+  --network mainnet -- update_agent --new_agent <LEGITIMATE_AGENT_ADDRESS>
+
+# (After timelock window expires)
+stellar contract invoke --id $VAULT_CONTRACT_ID --source <NEW_OWNER_KEY> \
+  --network mainnet -- confirm_agent_update
 
 # Reset pool addresses to audited contracts [owner]
 stellar contract invoke --id $VAULT_CONTRACT_ID --source <NEW_OWNER_KEY> \
@@ -224,6 +283,32 @@ stellar contract invoke \
 ```
 
 **Requires**: owner auth **[owner]**
+
+### Step 5a — Emergency harvest during agent-key rotation
+
+If the vault has funds deployed to a protocol (Blend or DEX) and the agent
+key is being rotated, use `emergency_harvest` to compound yield without
+waiting for the new agent key:
+
+```bash
+stellar contract invoke \
+  --id $VAULT_CONTRACT_ID \
+  --source <NEW_OWNER_SECRET_KEY> \
+  --network mainnet \
+  -- emergency_harvest \
+  --min_out 0
+```
+
+**Requires**: owner auth **[owner]**
+
+> **Note:** `emergency_harvest` bypasses the paused-state check, so it can be
+> called before or after `unpause`. It still respects the rebalance cooldown
+> and requires an active protocol (panics with `UnsupportedProtocol`
+> if `CurrentProtocol == "none"`). The emitted `EmergencyHarvestEvent` (topic
+> `em_harv`) is distinct from the regular `HarvestEvent` (topic `harvest`).
+>
+> Resume normal agent-initiated `harvest()` calls once the new agent key is
+> confirmed.
 
 ### Step 6 — Post-incident
 

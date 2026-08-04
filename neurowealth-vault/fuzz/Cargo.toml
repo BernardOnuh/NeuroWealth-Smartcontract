@@ -18,3 +18,45 @@ name = "deposit_withdraw_sequence"
 path = "fuzz_targets/deposit_withdraw_sequence.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "rebalance_transitions"
+path = "fuzz_targets/rebalance_transitions.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "rounding_boundaries"
+path = "fuzz_targets/rounding_boundaries.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "share_accounting_invariants"
+path = "fuzz_targets/share_accounting_invariants.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "agent_update_timelock"
+path = "fuzz_targets/agent_update_timelock.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "upgrade_timelock"
+path = "fuzz_targets/upgrade_timelock.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "admin_timelock_interleaved"
+path = "fuzz_targets/admin_timelock_interleaved.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "user_strategy"
+path = "fuzz_targets/user_strategy.rs"
+test = false
+doc = false

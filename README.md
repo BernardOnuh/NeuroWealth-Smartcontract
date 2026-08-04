@@ -4,51 +4,54 @@ AI-Powered DeFi Yield Platform on Stellar
 
 NeuroWealth is an autonomous AI investment agent that automatically manages and grows your crypto assets on the Stellar blockchain. Deposit once, let the AI find the best yield opportunities across Stellar's DeFi ecosystem — and withdraw anytime with no lock-ups.
 
+## Overview
+Traditional savings accounts offer near-zero interest. Traditional DeFi is too complex for most users. NeuroWealth bridges the gap with a simple chat interface on the web, powered by an AI agent that autonomously deploys your funds into the highest-yielding, safest opportunities on Stellar.
 
+## Why Stellar?
 
-Overview
-Traditional savings accounts offer near-zero interest. Traditional DeFi is too complex for most users. NeuroWealth bridges the gap  a simple chat interface web  powered by an AI agent that autonomously deploys your funds into the highest-yielding, safest opportunities on Stellar.
+- Transaction fees of fractions of a penny — perfect for frequent AI-driven rebalancing
+- 3–5 second finality — the AI can act on market changes instantly
+- Native DEX + Soroban smart contracts — composable, programmable yield strategies
+- Native USDC + XLM — borderless capital movement with no friction
+- Growing DeFi ecosystem — Blend (lending), Templar (borrowing), RWA protocols
 
-Why Stellar?
+## Features
+| Feature | Description |
+|---------|------------|
+| 🤖 AI Agent | Autonomous 24/7 yield optimization across Stellar DeFi |
+| 💬 Natural Language | Chat to deposit, withdraw, and check balances |
+| 📈 Auto-Rebalancing | Agent shifts funds to best opportunities automatically |
+| 🔐 Non-Custodial | Your funds live in audited Soroban smart contracts |
+| ⚡ Instant Withdrawals | No lock-ups, no penalties, withdraw anytime |
+| 📱 WhatsApp Ready | Full functionality through WhatsApp chat interface |
+| 🌍 Global Access | No geographic restrictions, no bank account required |
+| 🛡️ Security First | Soroban contracts protected by strict CEI ordering and access controls |
 
-Transaction fees of fractions of a penny — perfect for frequent AI-driven rebalancing
-3–5 second finality — the AI can act on market changes instantly
-Native DEX + Soroban smart contracts — composable, programmable yield strategies
-Native USDC + XLM — borderless capital movement with no friction
-Growing DeFi ecosystem — Blend (lending), Templar (borrowing), RWA protocols
-
-
-Features
-FeatureDescription🤖 AI AgentAutonomous 24/7 yield optimization across Stellar DeFi💬 Natural LanguageChat to deposit, withdraw, and check balances📈 Auto-RebalancingAgent shifts funds to best opportunities automatically🔐 Non-CustodialYour funds live in audited Soroban smart contracts⚡ Instant WithdrawalsNo lock-ups, no penalties, withdraw anytime📱 WhatsApp ReadyFull functionality through WhatsApp chat interface🌍 Global AccessNo geographic restrictions, no bank account required🛡️ Security FirstSoroban contracts protected by strict CEI ordering and access controls
-
-How It Works
+## How It Works
 1. User deposits USDC via web app
-       ↓
 2. Soroban vault contract receives and records the deposit
-       ↓
 3. Contract emits a deposit event
-       ↓
 4. AI agent detects the event and deploys funds to best protocol (e.g. Blend)
-       ↓
 5. Yield accumulates 24/7 — agent rebalances hourly if better opportunities exist
-       ↓
-6. User requests withdrawal anytime → agent pulls funds → sends back in seconds
-Three Investment Strategies
+6. User requests withdrawal anytime — agent pulls funds and sends back in seconds
+
+## Three Investment Strategies
 
 Conservative — Stablecoin lending on Blend. Low risk, steady 3–6% APY.
 Balanced — Mix of lending + DEX liquidity provision. Medium risk, 6–10% APY.
 Growth — Aggressive multi-protocol deployment. Higher risk, 10–15% APY.
 
 
-Tech Stack
-Smart Contracts
+## Tech Stack
+
+### Smart Contracts
 
 Language: Rust (Soroban SDK 21.0.0)
 Standard: ERC-4626 inspired vault architecture
 Network: Stellar Mainnet / Testnet
 Security: OpenZeppelin-equivalent patterns (Pausable, Access Control) and strict CEI pattern for reentrancy protection
 
-Backend / AI Agent
+### Backend / AI Agent
 
 Runtime: Node.js or Python
 Stellar SDK: @stellar/stellar-sdk
@@ -56,14 +59,14 @@ AI: Claude API / OpenAI for natural language intent parsing
 Database: PostgreSQL / Supabase for user position tracking
 Queue: Bull / Redis for reliable transaction processing
 
-Frontend
+### Frontend
 
 Framework: Next.js 15
 Blockchain: Stellar SDK + Freighter wallet integration
 Styling: Tailwind CSS
 Charts: Recharts for portfolio analytics
 
-Integrations
+### Integrations
 
 Yield Protocols: Blend Protocol (lending), Stellar DEX (liquidity)
 Price Feeds: Stellar anchor price feeds
@@ -73,36 +76,68 @@ Price Feeds: Stellar anchor price feeds
 
 ```text
 NeuroWealth-Smartcontract/
-├── neurowealth-vault/          # Soroban smart contracts workspace
+├── neurowealth-vault/              # Soroban smart contracts workspace
 │   ├── Cargo.toml
+│   ├── Cargo.lock
 │   ├── contracts/
-│   │   └── vault/              # Core vault contract
+│   │   └── vault/                  # Core vault contract
 │   │       ├── Cargo.toml
 │   │       └── src/
-│   │           ├── lib.rs      # Contract logic, events, error types
-│   │           └── topics.rs   # Exported event topic constants
-│   └── fuzz/                   # Libfuzzer fuzz targets
-├── scripts/                    # Deployment and utility scripts
-│   ├── deploy-devnet.sh        # One-command devnet deploy
-│   ├── e2e-devnet.sh           # End-to-end devnet tests
+│   │           ├── lib.rs          # Contract logic, events, error types
+│   │           ├── topics.rs       # Exported event topic constants
+│   │           └── tests/          # Test modules (39 files)
+│   └── fuzz/                       # Libfuzzer fuzz targets
+│       ├── Cargo.toml
+│       └── fuzz_targets/
+├── packages/
+│   └── vault-client/               # Generated TypeScript client
+│       ├── README.md
+│       ├── tsconfig.json
+│       └── src/
+│           ├── index.ts
+│           └── generated/
+├── scripts/                        # Deployment and utility scripts
+│   ├── deploy-devnet.sh
+│   ├── e2e-devnet.sh
 │   ├── verify-deployment.sh
-│   ├── generate-spec.py        # Generate contract-spec.json
+│   ├── generate-spec.py
 │   ├── validate-spec.py
-│   ├── README-E2E.md           # E2E test guide
-│   └── README-SPEC.md          # Spec generation guide
+│   ├── generate-client.js
+│   ├── check-readme.sh
+│   ├── check-no-bare-panic.sh
+│   ├── e2e-restore.sh
+│   ├── README-E2E.md
+│   └── README-SPEC.md
 ├── docs/
-│   ├── BLEND_INTEGRATION_RESEARCH.md  # Blend protocol integration research
-│   ├── DEX_INTEGRATION.md            # DEX liquidity pool integration research
-│   ├── MAINNET_CHECKLIST.md          # Pre-mainnet sign-off checklist
-│   ├── UPGRADE_MIGRATION.md          # Contract upgrade guide
-│   └── WASM_SIZE.md                  # WASM size tracking
-├── .env.devnet.template        # Environment variable template
-├── deny.toml                   # cargo-deny dependency audit config
-├── ARCHITECTURE.md             # Storage layout, data flows, invariants
-├── EVENTS.md                   # Full event schema reference
-├── SECURITY.md                 # Trust model and threat analysis
-├── CONTRIBUTING.md             # Development setup and PR process
+│   ├── BLEND_INTEGRATION_RESEARCH.md
+│   ├── DEX_INTEGRATION.md
+│   ├── UPGRADE_MIGRATION.md
+│   ├── MAINNET_CHECKLIST.md
+│   ├── PARTIAL_WITHDRAWAL_BEHAVIOR.md
+│   ├── REBALANCE_FAILURE_RECOVERY.md
+│   ├── WASM_SIZE.md
+│   ├── E2E_ARTIFACT_LIFECYCLE.md
+│   ├── monitoring.md
+│   └── state-machine.md
+├── test/                           # Off-chain security tests
+│   ├── NotOwnerCompromiseBlastRadius.test.ts
+│   └── OwnerCompromiseBlastRadius.test.ts
+├── .env.devnet.template
+├── .github/
+│   ├── ISSUE_TEMPLATE/
+│   ├── pull_request_template.md
+│   └── workflows/
+│       ├── ci.yml
+│       └── contract-spec.yml
+├── .stellar-version
+├── deny.toml
+├── ARCHITECTURE.md
+├── EVENTS.md
+├── SECURITY.md
+├── CONTRIBUTING.md
 ├── CHANGELOG.md
+├── contract-spec.json
+├── ERROR_STYLE_GUIDE.md
 └── README.md
 ```
 
@@ -114,8 +149,9 @@ directories once development begins:
 | Component | Directory | Status |
 |-----------|-----------|--------|
 | AI agent backend (Node.js / Python) | `agent/` | Planned |
-| Next.js web frontend | `frontend/` | Planned |
-| WhatsApp bot handler | `whatsapp/` | Planned |
+| Next.js web frontend | `frontend/` | Completed (#471, #472) |
+| WhatsApp bot handler | `whatsapp/` | Completed (#469) |
+| PostgreSQL / Supabase schema | `db/` / `supabase/` | Completed (#470) |
 
 ## Getting Started
 
@@ -127,9 +163,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add wasm32-unknown-unknown
 ```
 
-Install the Stellar CLI (pinned to 21.2.0):
+Install the Stellar CLI (version pinned in [`.stellar-version`](.stellar-version)):
 ```bash
-cargo install --locked stellar-cli --version 21.2.0 --features opt
+STELLAR_VERSION=$(cat .stellar-version | tr -d '[:space:]')
+cargo install --locked stellar-cli --version "$STELLAR_VERSION" --features opt
 ```
 
 ### Environment Variables
@@ -147,7 +184,7 @@ cd neurowealth-vault
 stellar contract build
 ```
 
-The compiled WASM is output to `target/wasm32v1-none/release/neurowealth_vault.wasm`.
+The compiled WASM is output to `target/wasm32-unknown-unknown/release/neurowealth_vault.wasm`.
 
 ### Run Tests
 
@@ -180,11 +217,14 @@ See [`scripts/README-E2E.md`](scripts/README-E2E.md) for end-to-end devnet valid
 
 ## Smart Contract
 The core Soroban vault contract handles all on-chain fund management.
-Key Functions
+
+### Key Functions
+
+#### Core & Administration
 
 | Function | Who Can Call | Description |
 | :--- | :--- | :--- |
-| `initialize` | Owner (once) | Set agent address and USDC token |
+| `initialize` | Deployer (once) | Authorize via deployer signature and set **separate** owner and agent addresses plus the USDC token |
 | `deposit` | Any verified user | Deposit USDC into the vault |
 | `withdraw` | User (their own funds) | Withdraw USDC back to wallet |
 | `withdraw_all` | User (their own funds) | Withdraw all USDC by burning all shares |
@@ -201,7 +241,71 @@ Key Functions
 | `set_tvl_cap` | Owner only | Sets the maximum total TVL that can be deposited |
 | `set_user_deposit_cap` | Owner only | Sets the maximum deposit amount per user |
 | `set_limits` | Owner only | **Deprecated**: Sets user deposit cap and TVL cap (use `set_caps` instead) |
-Security Model
+
+#### Strategy Preference
+
+| Function | Who Can Call | Description |
+| :--- | :--- | :--- |
+| `set_user_strategy` | User (their own preference) | Store a strategy preference (`conservative`, `balanced`, or `growth`) on-chain for the AI agent to read |
+| `get_user_strategy` | Anyone | Read a user's strategy preference (defaults to `balanced` when unset) |
+
+#### Share Math & Previews
+
+| Function | Who Can Call | Description |
+| :--- | :--- | :--- |
+| `preview_deposit_to_shares` | Anyone | Shares that would be minted for a given asset amount (rounds **down**) |
+| `preview_shares_to_assets` | Anyone | Assets that would be returned for a given share amount (rounds **down**) |
+| `preview_withdraw` | Anyone | Shares that would be burned to withdraw a given asset amount (rounds **up**, matching `withdraw`) |
+| `convert_to_shares` | Anyone | ERC-4626 asset → share conversion at the current rate (rounds **down**) |
+| `convert_to_assets` | Anyone | ERC-4626 share → asset conversion at the current rate (rounds **down**) |
+
+#### Asset Tracking
+
+| Function | Who Can Call | Description |
+| :--- | :--- | :--- |
+| `get_idle_balance` | Anyone | USDC held in the vault and not yet deployed to a protocol |
+| `get_deployed_assets` | Anyone | USDC currently supplied to the active protocol (`0` when `CurrentProtocol` is `none`) |
+| `get_asset_breakdown` | Anyone | Both figures in one call as `(idle, deployed)` — avoids two RPC round-trips |
+
+#### Storage Maintenance
+
+| Function | Who Can Call | Description |
+| :--- | :--- | :--- |
+| `touch_user_ttl` | Anyone | Extend the `Shares(user)` persistent entry TTL; returns `false` when no entry exists. Needed because read-only getters have no TTL side effects |
+
+#### Upgrade Timelock (Issue #316)
+
+The instant `upgrade()` entrypoint has been removed — see the *Upgrade Safety* section of [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+| Function | Who Can Call | Description |
+| :--- | :--- | :--- |
+| `schedule_upgrade` | Owner only (not paused) | Propose a new WASM hash; unlocks after `UPGRADE_TIMELOCK_LEDGERS` (17,280 ledgers ≈ 24 h) |
+| `execute_upgrade` | Owner only (not paused) | Apply the pending WASM once the timelock has elapsed and increment `Version` |
+| `cancel_upgrade` | Owner only | Clear the pending upgrade — the recovery path for a malicious or mistaken proposal |
+| `get_pending_upgrade` | Anyone | Returns `Some((wasm_hash, effective_ledger))` while an upgrade is pending, else `None` |
+
+#### Agent Timelock (Issue #317)
+
+Rotating the agent is a two-step, timelocked flow — see the *Agent Update Timelock* section of [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+| Function | Who Can Call | Description |
+| :--- | :--- | :--- |
+| `update_agent` | Owner only | **Propose** a new agent; unlocks after `AGENT_TIMELOCK_LEDGERS` (17,280 ledgers ≈ 24 h). The active agent is unchanged |
+| `confirm_agent_update` | Owner only | Apply the pending agent once the timelock has elapsed |
+| `cancel_agent_update` | Owner only | Clear the pending agent update |
+| `get_pending_agent_update` | Anyone | Returns `Some((pending_agent, effective_ledger))` while an update is pending, else `None` |
+
+#### Rebalance Throttle & Approvals
+
+| Function | Who Can Call | Description |
+| :--- | :--- | :--- |
+| `set_rebalance_cooldown` | Owner only | Minimum ledgers between `rebalance()` calls; `0` disables the cooldown |
+| `get_rebalance_cooldown` | Anyone | Read the configured cooldown in ledgers (`0` = disabled) |
+| `get_last_rebalance_ledger` | Anyone | Ledger of the most recent successful `rebalance()` (`0` if never called) |
+| `set_approval_ttl` | Owner only | Ledger lifetime for Blend/DEX token approvals (bounded to 1,000–500,000 ledgers) |
+| `get_approval_ttl` | Anyone | Read the configured approval TTL, or the default when unset |
+
+## Security Model
 
 Users can only withdraw their own funds — enforced at the contract level via user.require_auth()
 Only the designated AI agent keypair can call rebalance — no other address can move funds between protocols
@@ -212,7 +316,7 @@ Vault balance verification ensures reported assets match actual holdings
 Read-only getters have no TTL side effects; call `touch_user_ttl` to extend user share entry TTL
 Strict Checks-Effects-Interactions (CEI) pattern prevents reentrancy without needing explicit locks (see [reentrancy protection tests](neurowealth-vault/contracts/vault/src/tests/test_legacy_inline.rs))
 
-Secure Deployment Sequence
+## Secure Deployment Sequence
 
 `initialize()` is protected against front-running: the contract verifies that the `deployer`
 argument + `salt` cryptographically reproduce the deployed contract address, **and** requires
@@ -273,15 +377,18 @@ Follow these steps in order to safely initialize a new vault:
    after initialization. The `owner` keypair is now the administrator.
 
 
-AI Agent
+## AI Agent
+
 The agent runs as a persistent background service with two main loops.
-Decision Loop (runs every hour)
+
+### Decision Loop (runs every hour)
 1. Fetch current APY from all integrated protocols (Blend, DEX pools)
 2. Compare against each user's current deployed strategy
 3. If a better opportunity exists (> 0.5% improvement), rebalance
 4. Submit rebalance transaction to vault contract
 5. Log results to database
-Intent Parser (real-time, event-driven)
+
+### Intent Parser (real-time, event-driven)
 User message: "deposit 50 USDC into balanced strategy"
        ↓
 AI parses intent: { action: "deposit", amount: 50, strategy: "balanced" }
@@ -289,7 +396,7 @@ AI parses intent: { action: "deposit", amount: 50, strategy: "balanced" }
 Agent builds Stellar transaction
        ↓
 Returns confirmation: "Deposited 50 USDC. Earning ~8.2% APY in Balanced strategy."
-Supported User Intents
+### Supported User Intents
 
 deposit [amount] [optional: strategy]
 withdraw [amount or "all"]
@@ -299,21 +406,25 @@ switch to [conservative/balanced/growth]
 what is my APY
 
 
-WhatsApp Integration
+## WhatsApp Integration
+
 NeuroWealth is designed to be fully operable through WhatsApp, making it accessible to anyone with a smartphone — no wallet app or browser extension needed.
-User Flow
+
+### User Flow
 1. User sends "hi" to NeuroWealth WhatsApp number
 2. Bot introduces itself and asks for phone number verification (OTP)
 3. OTP verified → agent creates a Stellar keypair for this user (custodial)
 4. User can now deposit, withdraw, and check balance entirely through chat
 5. Funds are secured in the Soroban vault contract under their wallet address
-Setting Up the Webhook
+
+### Setting Up the Webhook
 bash# Your webhook endpoint receives WhatsApp messages
 POST /api/whatsapp/webhook
 
 # Register your webhook URL with Twilio
 # ngrok http 3000  ← for local testing
-Example Conversation
+
+### Example Conversation
 User:    deposit 100 USDC
 Agent:   Got it! Depositing 100 USDC into your Balanced strategy.
          This should take about 5 seconds on Stellar... ✅ Done!
@@ -330,8 +441,9 @@ User:    withdraw everything
 Agent:   Withdrawing 100.23 USDC... ✅ Done!
          Funds sent to your wallet. Arrived in 4 seconds.
 
-Deployment
-Quick Start (Devnet)
+## Deployment
+
+### Quick Start (Devnet)
 
 For testing and development, you can deploy to Stellar devnet in minutes:
 
@@ -393,13 +505,14 @@ The deployment script will:
 - Mint 10,000 USDC for testing
 - Save all contract addresses to `scripts/devnet-contracts.env`
 
-Testnet
+### Testnet
+
 ```bash
 # Deploy everything to Stellar testnet
 ./scripts/deploy.sh --network testnet
 ```
 
-Mainnet
+### Mainnet
 ⚠️ **CRITICAL:** Before deploying to Stellar mainnet, you must complete and sign off on all items in the [Mainnet Deployment Checklist](docs/MAINNET_CHECKLIST.md) (including separate keys setup, TVL limits, Blend pool verification, pause drills, and multisig governance plans).
 
 ```bash
@@ -410,7 +523,7 @@ npm test
 # Deploy to mainnet
 ./scripts/deploy.sh --network mainnet
 ```
-Infrastructure (Recommended)
+## Infrastructure (Recommended)
 
 Agent: Railway, Render, or a VPS (needs to run 24/7)
 Frontend: Vercel
@@ -418,23 +531,24 @@ Database: Supabase (managed PostgreSQL)
 Webhook: Same server as agent, or a separate serverless function
 
 
-Roadmap
-Phase 1 — Foundation (Current)
+## Roadmap
+
+### Phase 1 — Foundation (Current)
 
  Soroban vault contract (deposit, withdraw, rebalance)
  Basic AI agent with Blend protocol integration
  Natural language intent parsing
  Web frontend with portfolio dashboard
- WhatsApp bot MVP
+  WhatsApp bot MVP
 
-Phase 2 — Intelligence
+### Phase 2 — Intelligence
 
  Multi-protocol yield aggregation (Blend + DEX liquidity pools)
  Strategy backtesting and risk scoring
  Personalized risk profiles per user
- Earnings history and projection charts
+  Earnings history and projection charts
 
-Phase 3 — Scale
+### Phase 3 — Scale
 
  Real-world asset (RWA) yield strategies
  Cross-chain bridging (Stellar ↔ Ethereum via Axelar)
@@ -452,6 +566,6 @@ Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md)
    git commit -m "feat: add your feature"
    git push origin feature/your-feature-name
    ```
-2. **Open a Pull Request** against the `develop` branch.
+2. **Open a Pull Request** against the `main` branch.
 3. Please make sure to run `cargo test` and `npm test` before submitting.
 

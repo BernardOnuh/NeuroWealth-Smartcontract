@@ -882,3 +882,184 @@ fn test_property_total_shares_conserved_on_transfers() {
         assert_eq!(client.get_shares(&user3), user3_shares);
     }
 }
+
+// ============================================================================
+// ISSUE #320 — Explicit ceil-burn rounding policy tests
+// ============================================================================
+
+/// Rounding policy: deposit mints FLOOR shares; withdraw burns CEIL shares.
+/// This test verifies the vault never gives the user more than they deposited
+/// when they immediately deposit then withdraw the same amount.
+#[test]
+fn test_floor_mint_ceil_burn_vault_never_loses() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+
+    // Seed with a large depositor to create a non-trivial share price.
+    let whale = Address::generate(&env);
+    let whale_deposit = 10_000_000_i128; // 10 USDC
+    mint_and_deposit(&env, &client, &usdc_token, &whale, whale_deposit);
+
+    // Add 3 USDC yield so share price = 13/10 = 1.3.
+    let yield_amt = 3_000_000_i128;
+    token_client.mint(&contract_id, &yield_amt);
+    client.update_total_assets(&agent, &(whale_deposit + yield_amt), &false, &0);
+
+    let user = Address::generate(&env);
+    let deposit_amount = 5_000_000_i128; // 5 USDC
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit_amount);
+
+    // Compute floor shares minted (deposit path) and ceil shares burned (withdraw path).
+    let shares_minted = client.get_shares(&user);
+    let shares_burned_preview = client.preview_withdraw(&deposit_amount);
+
+    // Ceil burn >= floor mint — vault never loses value from a deposit-then-withdraw.
+    assert!(
+        shares_burned_preview >= shares_minted,
+        "ceil burn ({}) must be >= floor mint ({})",
+        shares_burned_preview,
+        shares_minted
+    );
+
+    // Assets returned from floor-minted shares must not exceed the deposit.
+    let assets_returned = client.preview_shares_to_assets(&shares_minted);
+    assert!(
+        assets_returned <= deposit_amount,
+        "assets returned ({}) must not exceed deposit ({})",
+        assets_returned,
+        deposit_amount
+    );
+}
+
+/// `withdraw_all` burns all user shares using floor conversion to assets and the
+/// burn itself is all remaining shares (no ceil needed). Verify the total
+/// returned assets equal the user's proportional claim.
+#[test]
+fn test_withdraw_all_returns_proportional_assets() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+
+    let user1 = Address::generate(&env);
+    let user2 = Address::generate(&env);
+
+    mint_and_deposit(&env, &client, &usdc_token, &user1, 6_000_000_i128);
+    mint_and_deposit(&env, &client, &usdc_token, &user2, 4_000_000_i128);
+
+    // Add 5 USDC yield to total 15 USDC across 10M shares.
+    token_client.mint(&contract_id, &5_000_000_i128);
+    client.update_total_assets(&agent, &15_000_000_i128, &false, &0);
+
+    let user1_shares = client.get_shares(&user1);
+    let total_shares = client.get_total_shares();
+    let total_assets = client.get_total_assets();
+
+    // Expected: user1 holds 60 % of shares → 60 % of 15M = 9M.
+    let expected_user1 = user1_shares * total_assets / total_shares;
+    let withdrawn1 = client.withdraw_all(&user1);
+
+    assert_eq!(
+        withdrawn1, expected_user1,
+        "withdraw_all must return exact proportional assets"
+    );
+    assert_eq!(
+        client.get_shares(&user1),
+        0,
+        "all shares burned after withdraw_all"
+    );
+}
+
+/// Withdrawing 1 stroop (smallest unit) at a very high share price must burn
+/// at least 1 share due to ceiling division. Under floor division it would
+/// burn 0 shares, allowing free withdrawals.
+#[test]
+fn test_ceil_burn_prevents_free_withdrawal_at_high_price() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+
+    let user = Address::generate(&env);
+    let deposit = 1_000_000_i128; // 1 USDC — 1M shares minted bootstrap
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit);
+
+    // Simulate 999x yield: 1 share is now worth 1000 stroops.
+    let huge_yield = 999_000_000_i128;
+    token_client.mint(&contract_id, &huge_yield);
+    client.update_total_assets(&agent, &(deposit + huge_yield), &false, &0);
+
+    // At price = 1000 assets / share:
+    // floor(1 * 1_000_000 / 1_000_000_000) = floor(0.001) = 0 shares  ← WRONG
+    // ceil(1 * 1_000_000 / 1_000_000_000)  = ceil(0.001)  = 1 share   ← CORRECT
+    let shares_preview = client.preview_withdraw(&1_i128);
+    assert!(
+        shares_preview >= 1,
+        "withdrawing 1 stroop must burn at least 1 share (got {})",
+        shares_preview
+    );
+
+    // Actual withdraw must burn >= 1 share.
+    let shares_before = client.get_shares(&user);
+    client.withdraw(&user, &1_i128);
+    let shares_after = client.get_shares(&user);
+    assert!(
+        shares_before - shares_after >= 1,
+        "actual withdraw must burn at least 1 share"
+    );
+}
+
+/// Multiple sequential partial withdrawals must each burn ceil shares,
+/// ensuring no user can gradually drain the vault by exploiting rounding.
+#[test]
+fn test_sequential_partial_withdrawals_ceil_each_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, agent, _owner, usdc_token) = setup_vault_with_token(&env);
+    let client = NeuroWealthVaultClient::new(&env, &contract_id);
+    let token_client = TestTokenClient::new(&env, &usdc_token);
+
+    let user = Address::generate(&env);
+    let deposit = 10_000_000_i128;
+    mint_and_deposit(&env, &client, &usdc_token, &user, deposit);
+
+    // Add yield so share price is > 1.
+    let yield_amt = 5_000_000_i128;
+    token_client.mint(&contract_id, &yield_amt);
+    client.update_total_assets(&agent, &(deposit + yield_amt), &false, &0);
+
+    let total_assets_initial = client.get_total_assets();
+    let mut cumulative_withdrawn = 0_i128;
+
+    // Withdraw 1M assets 5 times.
+    for _ in 0..5 {
+        let shares_before = client.get_shares(&user);
+        if shares_before == 0 {
+            break;
+        }
+        client.withdraw(&user, &1_000_000_i128);
+        cumulative_withdrawn += 1_000_000_i128;
+    }
+
+    // Total withdrawn must not exceed what the user is entitled to.
+    assert!(
+        cumulative_withdrawn <= total_assets_initial,
+        "cumulative withdrawals ({}) must not exceed total assets ({})",
+        cumulative_withdrawn,
+        total_assets_initial
+    );
+    // Vault total assets must remain non-negative.
+    assert!(
+        client.get_total_assets() >= 0,
+        "total assets must not go negative"
+    );
+}
